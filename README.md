@@ -1,10 +1,10 @@
-# LineFlow
+# LineFlow_test_conan
 
 [![PyPI](https://img.shields.io/pypi/v/lineflow-rl)](https://pypi.org/project/lineflow-rl/)
 
 `LineFLow` is a python framework to simulate assembly lines. It allows to model
 arbitrary discrete part assembly lines and provides an `gymnasium` environment to
-optimize them with reinforcement learning. The documentation can be
+optimize them with reinforcement learning. The documentation can be 
 found [here](https://hs-kempten.github.io/lineflow/).
 
 ![til](docs/imgs/lineflow.gif)
