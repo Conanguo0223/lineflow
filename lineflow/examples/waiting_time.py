@@ -188,5 +188,5 @@ class WaitingTime(Line):
 if __name__ == '__main__':
     line = WaitingTime()
     agent = make_optimal_agent(line)
-    line.run(simulation_end=4000, agent=agent)
+    line.run(simulation_end=4000, agent=agent, visualize = True)
     print(line.get_n_parts_produced())

@@ -3,7 +3,8 @@ import pygame
 import numpy as np
 import logging
 from tqdm import tqdm
-
+from torch_geometric.data import HeteroData
+import torch
 from lineflow.simulation.stationary_objects import StationaryObject
 from lineflow.simulation.states import LineStates
 from lineflow.simulation.connectors import Connector
@@ -32,6 +33,7 @@ class Line:
         random_state=10,
         step_size=1,
         scrap_factor=1,
+        use_graph_as_states=False,
         info=None,
     ):
 
@@ -41,6 +43,12 @@ class Line:
         self.realtime = realtime
         self.factor = factor
         self.step_size = step_size
+        # graph
+        self.use_graph_as_states = use_graph_as_states
+        self.node_mapping = None # use for updating the graph features
+        self.node_types = None
+        if self.use_graph_as_states:
+            self._graph_states = HeteroData()
         if info is None:
             info = []
         self._info = info
@@ -115,6 +123,178 @@ class Line:
             object_states[name] = obj.state
 
         self.state = LineStates(object_states, self.env)
+        nodes, edges = self.build_graph_info()
+        self._graph_states = self.build_graph_state(nodes, edges)
+        # if self.use_graph_as_states:
+            
+
+    def build_graph_info(self):
+        """
+        Builds the graph representation of the line
+        """
+        nodes = {}
+        edges = []
+
+        for obj_name in self.state.object_names:
+            obj = self._objects.get(obj_name)
+            
+            # check if the object is an edge or node
+            # edge needs edge_index, and edge attributes
+            if 'Buffer_' in obj_name and '_to_' in obj_name:
+                # Parse buffer name: Buffer_Source_to_Assembly
+                parts = obj_name.replace('Buffer_', '').split('_to_')
+                if len(parts) != 2:
+                    raise ValueError(f"Invalid buffer name: {obj_name}")
+                else:
+                    source_node, target_node = parts
+                    edges.append({
+                        'source': source_node,
+                        'target': target_node,
+                        'buffer': obj_name,
+                        'attributes': self._objects[obj_name].state.values
+                    })
+            else:
+                # it's a node
+                node_info = {
+                    'name': obj_name,
+                    'type': type(obj).__name__,
+                    'feature': self._objects[obj_name].state.values
+                }
+                
+                node_info['node_properties'] = self._extract_component_properties(obj)
+
+                nodes[obj_name] = node_info
+        return nodes, edges
+
+
+    def _extract_component_properties(self, component):
+        """Extract component-specific properties"""
+        properties = {}
+        
+        # Check component type and extract relevant properties
+        component_type = type(component).__name__
+        # type_lookup = {
+        #     'Assembly': 1,
+        #     'Process': 2,
+        #     'Source': 3,
+        #     'Sink': 4,
+        #     'Switch': 5,
+        #     'Magazine': 6,
+        # }
+        # properties['type_id'] = type_lookup.get(component_type, 0)
+
+        if component_type == 'Assembly':
+            properties.update({
+                'NOK_part_error_time': getattr(component, 'NOK_part_error_time', None)
+            })
+        elif component_type == 'Process':
+            properties.update({
+                'rework_probability': getattr(component, 'rework_probability', None),
+                # 'worker_pool': getattr(component, 'worker_pool', None) # TODO: manage the connection of worker pools
+            })
+        elif component_type == 'Source':
+            properties.update({
+                'unlimited_carriers': getattr(component, 'unlimited_carriers', False),
+                'carrier_capacity': getattr(component, 'carrier_capacity', None),
+                'processing_time': getattr(component, 'processing_time', None)
+            })
+        elif component_type == 'Sink':
+            properties.update({
+                'scrap_factor': getattr(component, 'scrap_factor', None),
+                'processing_time': getattr(component, 'processing_time', None)
+            })
+        elif component_type == 'Switch':
+            properties.update({
+                'scrap_factor': getattr(component, 'scrap_factor', None),
+                'processing_time': getattr(component, 'processing_time', None)
+            })
+        elif component_type == 'Magazine':
+            properties.update({
+                'is_assembly': True,
+                'NOK_part_error_time': getattr(component, 'NOK_part_error_time', None)
+            })
+        
+        # Check for actionable properties
+        if hasattr(component, 'state') and component.state is not None:
+            actionable_states = []
+            for state_name, state in component.state.states.items():
+                if state.is_actionable:
+                    actionable_states.append(state_name)
+            properties['actionable_states'] = actionable_states
+            properties['controllable'] = len(actionable_states) > 0
+        
+        return properties
+    
+    def build_graph_state(self, nodes, edges):
+        """
+        Builds the graph state from nodes and edges information
+        """
+        graph_state = HeteroData()
+
+        # Group up the nodes according to their type
+        node_types = {}
+        for node_name, node_info in nodes.items():
+            node_type = node_info['type']
+            node_data = node_info['feature']
+            if node_type not in node_types:
+                node_types[node_type] = []
+            node_types[node_type].append((node_name, node_data))
+        self.node_types = node_types
+        # Create node features and mappings
+        node_mapping = {}
+        source_to_node = {}
+        for node_type, node_list in node_types.items():
+            features = []
+            for i, (node_name, node_data) in enumerate(node_list):
+                # Create feature vector from recorded data
+                features.append(node_data)
+                node_mapping[node_name] = (node_type, i)
+
+            graph_state[node_type].x = torch.tensor(features, dtype=torch.float)
+        # update the node mapping for reference
+        self.node_mapping = node_mapping
+        # Group and add edges
+        edge_types = {}
+        edge_attrs = {}
+        edge_mapping = {}
+        for edge_data in edges:
+            source_name = edge_data['source']
+            target_name = edge_data['target']
+            
+            source_type = node_mapping[source_name][0]
+            target_type = node_mapping[target_name][0]
+            
+            edge_type = (source_type, 'connects_to', target_type)
+            
+            if edge_type not in edge_types:
+                edge_types[edge_type] = []
+                edge_attrs[edge_type] = []
+                edge_mapping[edge_type] = []
+            
+            source_idx = node_mapping[source_name][1]
+            target_idx = node_mapping[target_name][1]
+            edge_types[edge_type].append([source_idx, target_idx])
+            # Aggregate edge attributes
+            edge_attrs[edge_type].append(edge_data.get('attributes', []))
+            edge_mapping[edge_type].append(edge_data.get('buffer', {}))
+
+        # Add edges and edge attributes to HeteroData
+        for edge_type, edge_list in edge_types.items():
+            if edge_list:
+                edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+                graph_state[edge_type].edge_index = edge_index
+            # Add edge attributes if available
+            attrs = edge_attrs[edge_type]
+            if attrs and all(isinstance(a, (list, np.ndarray, torch.Tensor)) for a in attrs):
+                # Convert to tensor, handle lists/arrays
+                edge_attr_tensor = torch.tensor(np.array(attrs), dtype=torch.float)
+                graph_state[edge_type].edge_attr = edge_attr_tensor
+            else:
+                # If attributes are not present or not list-like, skip or handle accordingly
+                pass
+                
+
+        return graph_state
 
     def reset(self, random_state=None):
         """
@@ -255,11 +435,38 @@ class Line:
                 # If the next event is scheduled after simulation end
                 if simulation_end is not None and self.env.peek() > simulation_end:
                     terminated = True
-
+                
+                self.update_graph_state()
                 return self.state, terminated
 
             self.env.step()
 
+    def update_graph_state(self):
+        # extract features to update
+        # if not self.use_graph_as_states or not hasattr(self, "_graph_states"):
+        #     return
+
+        # update node features
+        for node_name, (node_type, node_idx) in self.node_mapping.items():
+            obj = self._objects.get(node_name)
+            if obj:
+                new_feature = torch.tensor(obj.state.values, dtype=torch.float)
+                self._graph_states[node_type].x[node_idx] = new_feature
+        # update edge attributes if any
+        for edge_type in self._graph_states.edge_types:
+            source_type = edge_type[0]
+            target_type = edge_type[2]
+            
+            edge_index = self._graph_states[edge_type].edge_index
+            # edge_index shape: [2, num_edges], so iterate over columns
+            for i in range(edge_index.shape[1]):
+                src_idx = edge_index[0, i].item()
+                tgt_idx = edge_index[1, i].item()
+                src_name = self.node_types[source_type][src_idx][0]
+                tgt_name = self.node_types[target_type][tgt_idx][0]
+                edge_name = f"Buffer_{src_name}_to_{tgt_name}"
+                self._graph_states[edge_type].edge_attr[i] = torch.tensor(self._objects[edge_name].state.values, dtype=torch.float)
+                
     def step_event(self):
         """
         Ensures that there is an Event scheduled for `self.step_size` intervals
