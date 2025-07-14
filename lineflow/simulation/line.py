@@ -124,9 +124,8 @@ class Line:
 
         self.state = LineStates(object_states, self.env)
         nodes, edges = self.build_graph_info()
-        self._graph_states = self.build_graph_state(nodes, edges)
-        # if self.use_graph_as_states:
-            
+        if self.use_graph_as_states:
+            self._graph_states = self.build_graph_state(nodes, edges)
 
     def build_graph_info(self):
         """
@@ -227,7 +226,8 @@ class Line:
     
     def build_graph_state(self, nodes, edges):
         """
-        Builds the graph state from nodes and edges information
+        Builds the graph state from nodes and edges information,
+        including self-loop edges for each node.
         """
         graph_state = HeteroData()
 
@@ -242,17 +242,15 @@ class Line:
         self.node_types = node_types
         # Create node features and mappings
         node_mapping = {}
-        source_to_node = {}
         for node_type, node_list in node_types.items():
             features = []
             for i, (node_name, node_data) in enumerate(node_list):
-                # Create feature vector from recorded data
                 features.append(node_data)
                 node_mapping[node_name] = (node_type, i)
-
+            features = np.array(features)
             graph_state[node_type].x = torch.tensor(features, dtype=torch.float)
-        # update the node mapping for reference
         self.node_mapping = node_mapping
+
         # Group and add edges
         edge_types = {}
         edge_attrs = {}
@@ -260,39 +258,45 @@ class Line:
         for edge_data in edges:
             source_name = edge_data['source']
             target_name = edge_data['target']
-            
             source_type = node_mapping[source_name][0]
             target_type = node_mapping[target_name][0]
-            
             edge_type = (source_type, 'connects_to', target_type)
-            
             if edge_type not in edge_types:
                 edge_types[edge_type] = []
                 edge_attrs[edge_type] = []
                 edge_mapping[edge_type] = []
-            
             source_idx = node_mapping[source_name][1]
             target_idx = node_mapping[target_name][1]
             edge_types[edge_type].append([source_idx, target_idx])
-            # Aggregate edge attributes
             edge_attrs[edge_type].append(edge_data.get('attributes', []))
             edge_mapping[edge_type].append(edge_data.get('buffer', {}))
+
+        # Add self-loop edges for each node type
+        for node_type, node_list in node_types.items():
+            edge_type = (node_type, 'self_loop', node_type)
+            if edge_type not in edge_types:
+                edge_types[edge_type] = []
+                edge_attrs[edge_type] = []
+                edge_mapping[edge_type] = []
+            for i, (node_name, node_data) in enumerate(node_list):
+                edge_types[edge_type].append([i, i])
+                # For self-loop, you can use a default attribute or the node's own feature
+                # Here, we use zeros as default self-loop attributes
+                attr = np.zeros_like(node_data)
+                edge_attrs[edge_type].append(attr)
+                edge_mapping[edge_type].append(f"self_loop_{node_name}")
 
         # Add edges and edge attributes to HeteroData
         for edge_type, edge_list in edge_types.items():
             if edge_list:
                 edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
                 graph_state[edge_type].edge_index = edge_index
-            # Add edge attributes if available
             attrs = edge_attrs[edge_type]
             if attrs and all(isinstance(a, (list, np.ndarray, torch.Tensor)) for a in attrs):
-                # Convert to tensor, handle lists/arrays
                 edge_attr_tensor = torch.tensor(np.array(attrs), dtype=torch.float)
                 graph_state[edge_type].edge_attr = edge_attr_tensor
             else:
-                # If attributes are not present or not list-like, skip or handle accordingly
                 pass
-                
 
         return graph_state
 
@@ -431,12 +435,19 @@ class Line:
 
         while True:
             if self.env.peek() > self.end_step:
+                # self.state.log()
+                # # If the next event is scheduled after simulation end
+                # if simulation_end is not None and self.env.peek() > simulation_end:
+                #     terminated = True
+                # if self.use_graph_as_states:
+                #     self.update_graph_state()
+                #     return self._graph_states, terminated
+                # return self.state, terminated
                 self.state.log()
                 # If the next event is scheduled after simulation end
                 if simulation_end is not None and self.env.peek() > simulation_end:
                     terminated = True
-                
-                self.update_graph_state()
+
                 return self.state, terminated
 
             self.env.step()
@@ -458,6 +469,9 @@ class Line:
             target_type = edge_type[2]
             
             edge_index = self._graph_states[edge_type].edge_index
+            if source_type == target_type:
+                # self-loop edges
+                continue
             # edge_index shape: [2, num_edges], so iterate over columns
             for i in range(edge_index.shape[1]):
                 src_idx = edge_index[0, i].item()

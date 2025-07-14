@@ -191,7 +191,7 @@ if __name__ == '__main__':
     parser.add_argument('--ent_coef', default=0.1, type=float)
     parser.add_argument('--n_stack', default=1, type=int)
     parser.add_argument('--n_steps', default=500, type=int) # Tim until update is done
-    parser.add_argument('--n_envs', default=5, type=int)
+    parser.add_argument('--n_envs', default=1, type=int)
     parser.add_argument('--seed', default=0, type=int)
     parser.add_argument('--total_steps', default=500_000, type=int)
     parser.add_argument(

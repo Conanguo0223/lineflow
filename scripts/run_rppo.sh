@@ -13,7 +13,7 @@ ENTCOEF=("0.0"  "0.0"   "0.01"    "0.01" )
 
 for i in "${!LR[@]}"; do
     echo "Running config $i: lr=${LR[$i]}, ent_coef=${ENTCOEF[$i]}"
-    python3 train.py --deterministic \
+    python3 /home/aipexws1/conan/agile_stem/lineflow/scripts/train.py --deterministic \
         --env="$ENV" --n_cells="$N" --model=PPO --n_stack=1 --recurrent \
         --seed="$SEED" --info="$INFO" --total_step="$TOTAL_STEPS" \
         --learning_rate="${LR[$i]}" \
