@@ -46,9 +46,10 @@ publish.sh
 site/*
 
 # Notebooks
-.ipynb_checkpoints/*
-.jupyter/*
-*.ipynb
+#.ipynb_checkpoints/*
+#.jupyter/*
+#*.ipynb
+runs
 
 # VSCode
 .vscode/*
