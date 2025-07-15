@@ -18,13 +18,18 @@ def _is_state_supported(state):
     return isinstance(state, DiscreteState) or isinstance(state, NumericState)
 
 
-def _get_bounds(line_state, state_types='actions'):
+def _get_bounds(line_state, state_types='actions', graph=False):
     if state_types not in ["actions", "observations"]:
         raise ValueError('Inconsistent choice')
 
-    bounds_l = []
-    bounds_h = []
-
+    
+    if graph:
+        # if there are states that needs to be tracked
+        # we will save the bounds in a dictionary, since there could be different shapes for the states
+        state_dict = {}
+    else:
+        bounds_l = []
+        bounds_h = []
     for line_object, state_name in line_state:
 
         state = line_state[line_object][state_name]
@@ -33,20 +38,44 @@ def _get_bounds(line_state, state_types='actions'):
             (state_types == 'actions' and state.is_actionable) or
             (state_types == 'observations' and state.is_observable)
         ):
+            if graph:
+                # track new object
+                if line_object not in state_dict:
+                    state_dict[line_object] = {}
+                    state_dict[line_object]['bound_l'] = []
+                    state_dict[line_object]['bound_h'] = []
+
             if not _is_state_supported(state):
                 raise ValueError('State not (yet) supported')
 
             if isinstance(state, DiscreteState):
-                bounds_l.append(min(state.values))
-                bounds_h.append(max(state.values))
+                if graph:
+                    state_dict[line_object]['bound_l'].append(min(state.values))
+                    state_dict[line_object]['bound_h'].append(max(state.values))
+                else:
+                    bounds_l.append(min(state.values))
+                    bounds_h.append(max(state.values))
             if isinstance(state, NumericState):
                 if state_types == "actions":
                     raise ValueError('Only discrete actions supported')
-
-                bounds_l.append(state.vmin)
-                bounds_h.append(state.vmax)
-
-    return np.array(bounds_l, dtype=np.float32), np.array(bounds_h, dtype=np.float32)
+                if graph:
+                    state_dict[line_object]['bound_l'].append(state.vmin)
+                    state_dict[line_object]['bound_h'].append(state.vmax)
+                else:
+                    bounds_l.append(state.vmin)
+                    bounds_h.append(state.vmax)
+    
+    if graph:
+        # if there are states that needs to be tracked
+        # we will save the bounds in a dictionary, since there could be different shapes for the states
+        for line_object in state_dict:
+            state_dict[line_object]['bound_l'] = np.array(state_dict[line_object]['bound_l'], dtype=np.float32)
+            state_dict[line_object]['bound_h'] = np.array(state_dict[line_object]['bound_h'], dtype=np.float32)
+        return state_dict
+    else:
+        # if there are no states that needs to be tracked
+        # we will return the bounds as arrays
+        return np.array(bounds_l, dtype=np.float32), np.array(bounds_h, dtype=np.float32)
 
 
 def _build_observation_space(line_state):
@@ -65,6 +94,16 @@ def _build_action_space(line_state):
         start=bounds_l,
     )
 
+def _build_observation_space_graph(line_state):
+    # get the observation space for the graph
+    observation_space = spaces.Dict({})
+    observation_spaces = _get_bounds(line_state, state_types='observations',graph=True)
+    for line_object in observation_spaces:
+        observation_space[line_object] = spaces.Box(
+            low=observation_spaces[line_object]['bound_l'].reshape(1, -1),
+            high=observation_spaces[line_object]['bound_h'].reshape(1, -1),
+        )
+    return observation_space
 
 class LineSimulation(gym.Env):
     """
@@ -88,7 +127,7 @@ class LineSimulation(gym.Env):
 
     metadata = {"render_modes": [None, "human"]}
 
-    def __init__(self, line, simulation_end, reward="parts", part_reward_lookback=0, render_mode=None):
+    def __init__(self, line, simulation_end, reward="parts", part_reward_lookback=0, render_mode=None, use_graph = False):
         super().__init__()
         self.line = line
         self.simulation_end = simulation_end
@@ -98,10 +137,15 @@ class LineSimulation(gym.Env):
 
         assert reward in ["uptime", "parts"]
         self.reward = reward
-
-        # fix an order of states
-        self.action_space = _build_action_space(self.line.state)
-        self.observation_space = _build_observation_space(line_state=self.line.state)
+        self.use_graph = use_graph
+        if self.use_graph :
+            # action stays the same, but observation space is different because we want to pass node features
+            self.action_space = _build_action_space(self.line.state)
+            self.observation_space = _build_observation_space_graph(line_state=self.line.state)
+        else:
+            # fix an order of states
+            self.action_space = _build_action_space(self.line.state)
+            self.observation_space = _build_observation_space(line_state=self.line.state)
 
         self.n_parts = 0
         self.n_scrap_parts = 0
@@ -146,8 +190,10 @@ class LineSimulation(gym.Env):
             state = self.line.state
             terminated = True
             truncated = True
-
-        observation = self._get_observations_as_tensor(state)
+        if self.line.use_graph_as_states:
+            observation = state
+        else:
+            observation = self._get_observations_as_tensor(state)
 
         if self.reward == "parts":
             reward = (self.line.get_n_parts_produced() - self.n_parts) - \
@@ -185,7 +231,11 @@ class LineSimulation(gym.Env):
         self.n_scrap_parts = 0
 
         state, _ = self.line.step()
-        observation = self._get_observations_as_tensor(state)
+        # observation vector as state
+        if self.line.use_graph_as_states:
+            observation = state
+        else:
+            observation = self._get_observations_as_tensor(state)
 
         if self.render_mode == "human":
             self.screen = self.line.setup_draw()
@@ -207,3 +257,8 @@ class LineSimulation(gym.Env):
 
         X = state.get_observations(lookback=1, include_time=False)
         return np.array(X, dtype=np.float32)
+    
+    def _get_observations_as_dict(self, state):
+
+        X = state.get_observations(lookback=1, include_time=False)
+        return {k: np.array(v, dtype=np.float32) for k, v in X.items()}

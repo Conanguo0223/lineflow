@@ -47,6 +47,9 @@ class Line:
         self.use_graph_as_states = use_graph_as_states
         self.node_mapping = None # use for updating the graph features
         self.node_types = None
+        self._graph_states = None
+        self.nodes = None
+        self.edges = None
         if self.use_graph_as_states:
             self._graph_states = HeteroData()
         if info is None:
@@ -123,9 +126,9 @@ class Line:
             object_states[name] = obj.state
 
         self.state = LineStates(object_states, self.env)
-        nodes, edges = self.build_graph_info()
+        self.nodes, self.edges = self.build_graph_info()
         if self.use_graph_as_states:
-            self._graph_states = self.build_graph_state(nodes, edges)
+            self._graph_states = self.build_graph_state(self.nodes, self.edges)
 
     def build_graph_info(self):
         """
@@ -435,18 +438,19 @@ class Line:
 
         while True:
             if self.env.peek() > self.end_step:
-                # self.state.log()
-                # # If the next event is scheduled after simulation end
-                # if simulation_end is not None and self.env.peek() > simulation_end:
-                #     terminated = True
-                # if self.use_graph_as_states:
-                #     self.update_graph_state()
-                #     return self._graph_states, terminated
-                # return self.state, terminated
                 self.state.log()
                 # If the next event is scheduled after simulation end
                 if simulation_end is not None and self.env.peek() > simulation_end:
                     terminated = True
+                if self.use_graph_as_states:
+                    self.update_graph_state()
+                    return self._graph_states, terminated
+                return self.state, terminated
+
+                # self.state.log()
+                # # If the next event is scheduled after simulation end
+                # if simulation_end is not None and self.env.peek() > simulation_end:
+                #     terminated = True
 
                 return self.state, terminated
 
