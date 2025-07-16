@@ -301,14 +301,14 @@ class PPOTrainer:
         #     info=[],
         #     use_graph_as_states=True,
         #     )
-        line = MultiProcess(
-            alternate=False,
-            n_processes=n_cells,
-            step_size=10,
-            info=[('SwitchD', 'index_buffer_out')],
-            use_graph_as_states=True,
-        )
-        # line = WaitingTime(use_graph_as_states=True, step_size=100)
+        # line = MultiProcess(
+        #     alternate=False,
+        #     n_processes=n_cells,
+        #     step_size=10,
+        #     info=[('SwitchD', 'index_buffer_out')],
+        #     use_graph_as_states=True,
+        # )
+        line = WaitingTime(use_graph_as_states=True, step_size=10)
         self.envs = make_stacked_vec_env(
             line=line,
             simulation_end=4000,
@@ -346,7 +346,8 @@ class PPOTrainer:
         self.obs_processor = GraphObservationProcessor(
             self.graph_encoder, 
             self.device,
-            target_nodes={'Switch': [0,1]}  # Example target nodes
+            # target_nodes={'Switch': [0,1]}  # Example target nodes
+            target_nodes={'Source': [1]}  # Only process 'S_component' node type
         )
         
         # Setup optimizer with both networks

@@ -146,6 +146,12 @@ class Station(StationaryObject):
             self.processing_std = processing_std*self.processing_time
 
         self.worker_assignments = {}
+        # Time-based throughput tracking
+        self.throughput_window = 100  # Time window for throughput calculation
+        self.throughput_history = []  # List of (timestamp, carrier_count, part_count)
+        self.current_window_carriers = 0
+        self.current_window_parts = 0
+        self.window_start_time = 0
 
     @property
     def is_automatic(self):
@@ -322,7 +328,59 @@ class Station(StationaryObject):
     def apply(self, actions):
         self._derive_actions_from_new_state(actions)
         self.state.apply(actions)
-
+    
+    def _record_throughput_time_based(self, carrier):
+        """Record throughput with time-based windowing"""
+        current_time = self.env.now
+        
+        # Initialize window if first record
+        if self.window_start_time == 0:
+            self.window_start_time = current_time
+        
+        # Check if we need to start a new time window
+        if current_time >= self.window_start_time + self.throughput_window:
+            # Store the completed window
+            self.throughput_history.append({
+                'window_start': self.window_start_time,
+                'window_end': self.window_start_time + self.throughput_window,
+                'carriers_processed': self.current_window_carriers,
+                'parts_processed': self.current_window_parts,
+                'throughput_rate': self.current_window_carriers / self.throughput_window,
+                'parts_rate': self.current_window_parts / self.throughput_window
+            })
+            
+            # Start new window
+            self.window_start_time = current_time
+            self.current_window_carriers = 0
+            self.current_window_parts = 0
+            
+            # Update state with latest throughput rate
+            if hasattr(self, 'state') and 'throughput_rate' in self.state.names:
+                latest_rate = self.throughput_history[-1]['throughput_rate']
+                self.state['throughput_rate'].update(latest_rate)
+        
+        # Record current event
+        self.current_window_carriers += 1
+        if hasattr(carrier, 'parts'):
+            self.current_window_parts += len(carrier.parts)
+        else:
+            self.current_window_parts += 1
+        
+        # Update current window state
+        if hasattr(self, 'state') and 'current_window_throughput' in self.state.names:
+            self.state['current_window_throughput'].update(self.current_window_carriers)
+    
+    def get_throughput_for_period(self, start_time, end_time):
+        """Get throughput data for a specific time period"""
+        relevant_windows = []
+        for window in self.throughput_history:
+            if (window['window_start'] < end_time and window['window_end'] > start_time):
+                relevant_windows.append(window)
+        return relevant_windows
+    
+    def get_recent_throughput(self, time_periods=5):
+        """Get throughput for the last N time periods"""
+        return self.throughput_history[-time_periods:] if len(self.throughput_history) >= time_periods else self.throughput_history
 
 class Assembly(Station):
     """
@@ -383,6 +441,10 @@ class Assembly(Station):
             CountState('n_scrap_parts', is_actionable=False, is_observable=True),
             CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
             NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),
+            # Time-based throughput metrics
+            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
+            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
         )
         self.state['on'].update(True)
         self.state['mode'].update("waiting")
@@ -391,6 +453,9 @@ class Assembly(Station):
         self.state['n_scrap_parts'].update(0)
         self.state['processing_time'].update(self.processing_time)
         self.state['n_workers'].update(self.n_workers)
+        self.state['throughput_rate'].update(0.0)
+        self.state['current_window_throughput'].update(0)
+        self.state['avg_throughput_last_5_windows'].update(0.0)
 
     def connect_to_component_input(self, station, *args, **kwargs):
         buffer = Buffer(name=f"Buffer_{station.name}_to_{self.name}", *args, **kwargs)
@@ -467,6 +532,12 @@ class Assembly(Station):
 
                 # Release workers
                 self.release_workers()
+                
+                # Record time-based throughput
+                self._record_throughput_time_based(carrier)
+                
+                # Update moving averages
+                self._update_throughput_metrics()
 
                 # Place carrier on buffer_out
                 yield self.env.process(self.set_to_waiting())
@@ -481,6 +552,13 @@ class Assembly(Station):
 
             else:
                 yield self.turn_off()
+
+    def _update_throughput_metrics(self):
+        """Update rolling throughput metrics"""
+        recent_windows = self.get_recent_throughput(5)
+        if recent_windows:
+            avg_rate = sum(w['throughput_rate'] for w in recent_windows) / len(recent_windows)
+            self.state['avg_throughput_last_5_windows'].update(avg_rate)
 
 
 class Process(Station):
@@ -658,7 +736,7 @@ class Source(Station):
 
         self.state = ObjectStates(
             DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-            DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+            DiscreteState('mode', categories=['working', 'waiting', 'failing'], is_observable=False),
             DiscreteState(
                 name='waiting_time', 
                 categories=np.arange(0, 100, self.waiting_time_step), 
@@ -820,8 +898,8 @@ class Sink(Station):
 
         self.state = ObjectStates(
             DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-            DiscreteState('mode', categories=['working', 'waiting', 'failing']),
-            CountState('n_parts_produced', is_actionable=False, is_observable=False),
+            DiscreteState('mode', categories=['working', 'waiting', 'failing'], is_observable=False),
+            CountState('n_parts_produced', is_actionable=False, is_observable=True),
             TokenState(name='carrier', is_observable=False),
         )
 

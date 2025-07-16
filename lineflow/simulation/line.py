@@ -159,17 +159,26 @@ class Line:
             else:
                 # it's a node
                 if type(obj).__name__ == 'WorkerPool':
+                    features = self._objects[obj_name].state.values
+                    observables = self._objects[obj_name].state.observables
+                    # Only keep observables
+                    features = np.array(features, dtype=np.float32)[observables]
                     # WorkerPool is a special case, we want to treat it as a nod
                     node_info = {
                         'name': obj_name,
                         'type': type(obj).__name__,
-                        'feature': self._objects[obj_name].state.values
+                        'feature': features
                     }
                     for worker_name, worker in obj.workers.items():
+                        features = worker.state.values
+                        observables = worker.state.observables
+                        # Only keep observables
+                        features = np.array(features, dtype=np.float32)[observables]
+                        worker_features = [features, worker.transition_time]
                         nodes[worker_name] = {
                             'name': worker_name,
                             'type': 'Worker',
-                            'feature': [worker.state.value, worker.transition_time]
+                            'feature': worker_features
                         }
                         
                         # Connect pool to workers
@@ -187,10 +196,14 @@ class Line:
                             'type': 'assigned_to'
                         })
                 else:
+                    features = self._objects[obj_name].state.values
+                    observables = self._objects[obj_name].state.observables
+                    # Only keep observables
+                    features = np.array(features, dtype=np.float32)[observables]
                     node_info = {
                         'name': obj_name,
                         'type': type(obj).__name__,
-                        'feature': self._objects[obj_name].state.values
+                        'feature': features
                     }
                     
                     node_info['node_properties'] = self._extract_component_properties(obj)
@@ -482,7 +495,7 @@ class Line:
                 # if simulation_end is not None and self.env.peek() > simulation_end:
                 #     terminated = True
 
-                return self.state, terminated
+                # return self.state, terminated
 
             self.env.step()
 
@@ -495,7 +508,11 @@ class Line:
         for node_name, (node_type, node_idx) in self.node_mapping.items():
             obj = self._objects.get(node_name)
             if obj:
-                new_feature = torch.tensor(obj.state.values, dtype=torch.float)
+                # Only keep state_values where observables is True
+                state_values = np.array(obj.state.values, dtype=np.float32)
+                observables = np.array(obj.state.observables, dtype=bool)
+                filtered_values = state_values[observables]
+                new_feature = torch.tensor(filtered_values, dtype=torch.float)
                 self._graph_states[node_type].x[node_idx] = new_feature
         # update edge attributes if any
         for edge_type in self._graph_states.edge_types:
@@ -538,6 +555,7 @@ class Line:
         show_status=True,
         visualize=False,
         capture_screen=False,
+        collect_data = False,
     ):
         """
         Args:
@@ -565,12 +583,23 @@ class Line:
             bar_format='{desc}: {percentage:3.2f}%|{bar:50}|',
             disable=not show_status,
         )
-
+        if collect_data:
+            collected_states = []
+            assert self.use_graph_as_states is True, "need to use graph states for data collection"
         while self.env.now < simulation_end:
             pbar.update(self.env.now - now)
             now = self.env.now
             try:
-                self.step()
+                # Step the simulation
+                state, terminated = self.step(simulation_end=simulation_end)
+                
+                # Collect the current graph state (don't overwrite self._graph_states!)
+                if collect_data:
+                    if self._graph_states is not None:
+                        # Clone the HeteroData to avoid reference issues
+                        collected_states.append(self._graph_states.clone())
+                    else:
+                        print(f"Warning: _graph_states is None at time {self.env.now}")
             except simpy.core.EmptySchedule:
                 logger.warning('Simulation in dead-lock - end early')
                 break
@@ -584,13 +613,13 @@ class Line:
                     self._draw(screen, actions)
                 else:
                     self._draw(screen)
-
         if capture_screen and visualize:
             pygame.image.save(screen, f"{self.name}.png")
 
         if visualize:
             self.teardown_draw()
-
+        if collect_data:
+            return collected_states
     def get_observations(self, object_name=None):
         """
         """

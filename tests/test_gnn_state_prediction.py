@@ -262,311 +262,318 @@ class ImprovedHGT(torch.nn.Module):
         
         return x_dict
 
-import numpy as np
-import torch
-from torch import nn
-from torch.nn import Linear
-from torch_geometric.nn import HGTConv
-from torch_geometric.data import HeteroData
-from typing import Dict, List, Tuple
-import matplotlib.pyplot as plt
-from lineflow.simulation import (
-    Source,
-    Sink,
-    Line,
-    Assembly,
-)
-
-# ...existing code (WTAssembly, WaitingTime classes)...
-
-class GraphStateCollector:
-    """Collects graph states and transitions for training"""
-    
-    def __init__(self, line):
-        self.line = line
-        self.states = []
-        self.next_states = []
-        self.actions = []
-        self.timesteps = []
-        
-    def collect_transition(self, current_state: HeteroData, action: dict, next_state: HeteroData, timestep: int):
-        """Collect a single transition"""
-        self.states.append(self._clone_hetero_data(current_state))
-        self.next_states.append(self._clone_hetero_data(next_state))
-        self.actions.append(action.copy())
-        self.timesteps.append(timestep)
-    
-    def _clone_hetero_data(self, data: HeteroData) -> HeteroData:
-        """Deep copy HeteroData"""
-        new_data = HeteroData()
-        for key, value in data.items():
-            new_data[key] = value.clone() if hasattr(value, 'clone') else value
-        return new_data
-    
-    def get_dataset(self) -> Tuple[List[HeteroData], List[HeteroData], List[dict]]:
-        """Return collected dataset"""
-        return self.states, self.next_states, self.actions
-
-class StatePredictor(torch.nn.Module):
-    """GNN model to predict next states"""
-    
-    def __init__(self, metadata, node_feature_dims: Dict[str, int]):
-        super().__init__()
-        self.hidden_channels = 64
-        self.num_heads = 2
-        self.num_layers = 2
-        self.dropout = 0.1
-        self.metadata = metadata
-        
-        # Input projection layers
-        self.lin_dict = torch.nn.ModuleDict()
-        for node_type in metadata[0]:  # node_types
-            self.lin_dict[node_type] = nn.Sequential(
-                Linear(node_feature_dims[node_type], self.hidden_channels),
-                nn.LayerNorm(self.hidden_channels),
-                nn.ReLU(),
-                nn.Dropout(self.dropout)
-            )
-        
-        # HGT encoder layers
-        self.convs = torch.nn.ModuleList()
-        self.norms = torch.nn.ModuleList()
-        for _ in range(self.num_layers):
-            conv = HGTConv(
-                self.hidden_channels, 
-                self.hidden_channels, 
-                metadata,
-                self.num_heads
-            )
-            self.convs.append(conv)
-            self.norms.append(nn.LayerNorm(self.hidden_channels))
-        
-        # State prediction heads for each node type
-        self.prediction_heads = torch.nn.ModuleDict()
-        for node_type in metadata[0]:
-            self.prediction_heads[node_type] = nn.Sequential(
-                Linear(self.hidden_channels, self.hidden_channels),
-                nn.ReLU(),
-                nn.Dropout(self.dropout),
-                Linear(self.hidden_channels, node_feature_dims[node_type])
-            )
-        
-        self._init_weights()
-    
-    def _init_weights(self):
-        """Proper weight initialization"""
-        for m in self.modules():
-            if isinstance(m, Linear):
-                torch.nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    torch.nn.init.zeros_(m.bias)
-    
-    def forward(self, x_dict: Dict[str, torch.Tensor], edge_index_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        # Input projection
-        x_dict = {
-            node_type: self.lin_dict[node_type](x) 
-            for node_type, x in x_dict.items()
-        }
-        
-        # HGT encoder layers with residual connections
-        for conv, norm in zip(self.convs, self.norms):
-            x_dict_new = conv(x_dict, edge_index_dict)
-            # Apply residual connection and normalization
-            x_dict = {
-                node_type: norm(x_dict_new[node_type] + x_dict[node_type])
-                for node_type in x_dict.keys()
-            }
-        
-        # State prediction
-        predictions = {}
-        for node_type, features in x_dict.items():
-            predictions[node_type] = self.prediction_heads[node_type](features)
-        
-        return predictions
-
-def collect_training_data(line, num_episodes=10, steps_per_episode=100):
-    """Collect training data by running simulation with various agents"""
-    
-    collector = GraphStateCollector(line)
-    
-    for episode in range(num_episodes):
-        print(f"Collecting episode {episode + 1}/{num_episodes}")
-        
-        # Reset line for new episode
-        line.reset()
-        
-        # Use random agent for data diversity
-        def random_agent(state, env):
-            waiting_times = line['S_component'].state['waiting_time'].categories
-            actions = {}
-            actions['S_component'] = {'waiting_time': np.random.choice(len(waiting_times))}
-            return actions
-        
-        # Run simulation and collect states
-        current_state = None
-        timestep = 0
-        
-        while timestep < steps_per_episode and not line.is_finished():
-            # Get current graph state
-            if hasattr(line, '_graph_states'):
-                current_graph_state = line._graph_states
-            else:
-                # If graph states not available, skip
-                break
-            
-            # Get action from agent
-            line_state = line.state
-            action = random_agent(line_state, line.env)
-            
-            # Store current state
-            if current_state is not None:
-                collector.collect_transition(
-                    current_state, 
-                    previous_action, 
-                    current_graph_state, 
-                    timestep
-                )
-            
-            # Apply action and step
-            line.step(action)
-            
-            # Update for next iteration
-            current_state = current_graph_state
-            previous_action = action
-            timestep += 1
-    
-    return collector
-
-def train_state_predictor(collector: GraphStateCollector, num_epochs=100):
-    """Train the state prediction model"""
-    
-    states, next_states, actions = collector.get_dataset()
-    
-    if len(states) == 0:
-        print("No training data collected!")
-        return None
-    
-    # Get metadata from first state
-    sample_state = states[0]
-    metadata = sample_state.metadata()
-    
-    # Calculate node feature dimensions
-    node_feature_dims = {}
-    for node_type in metadata[0]:
-        if node_type in sample_state.x_dict:
-            node_feature_dims[node_type] = sample_state.x_dict[node_type].shape[1]
-    
-    # Create model
-    model = StatePredictor(metadata, node_feature_dims)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    criterion = nn.MSELoss()
-    
-    # Training loop
-    losses = []
-    
-    for epoch in range(num_epochs):
-        epoch_loss = 0.0
-        num_batches = 0
-        
-        # Simple batch processing (can be improved with DataLoader)
-        for i in range(len(states)):
-            current_state = states[i]
-            target_state = next_states[i]
-            
-            # Forward pass
-            optimizer.zero_grad()
-            predictions = model(current_state.x_dict, current_state.edge_index_dict)
-            
-            # Calculate loss for each node type
-            total_loss = 0
-            for node_type in predictions.keys():
-                if node_type in target_state.x_dict:
-                    pred = predictions[node_type]
-                    target = target_state.x_dict[node_type]
-                    loss = criterion(pred, target)
-                    total_loss += loss
-            
-            # Backward pass
-            if total_loss > 0:
-                total_loss.backward()
-                optimizer.step()
-                epoch_loss += total_loss.item()
-                num_batches += 1
-        
-        avg_loss = epoch_loss / max(num_batches, 1)
-        losses.append(avg_loss)
-        
-        if epoch % 10 == 0:
-            print(f"Epoch {epoch}, Average Loss: {avg_loss:.6f}")
-    
-    return model, losses
-
-def evaluate_model(model, collector: GraphStateCollector):
-    """Evaluate the trained model"""
-    
-    states, next_states, _ = collector.get_dataset()
-    
-    if len(states) == 0:
-        print("No data to evaluate!")
-        return
-    
-    model.eval()
-    total_error = 0.0
-    num_predictions = 0
-    
-    with torch.no_grad():
-        for i in range(len(states)):
-            current_state = states[i]
-            target_state = next_states[i]
-            
-            predictions = model(current_state.x_dict, current_state.edge_index_dict)
-            
-            # Calculate mean absolute error
-            for node_type in predictions.keys():
-                if node_type in target_state.x_dict:
-                    pred = predictions[node_type]
-                    target = target_state.x_dict[node_type]
-                    error = torch.mean(torch.abs(pred - target))
-                    total_error += error.item()
-                    num_predictions += 1
-    
-    avg_error = total_error / max(num_predictions, 1)
-    print(f"Average Prediction Error: {avg_error:.6f}")
-    
-    return avg_error
-
-def plot_training_curves(losses):
-    """Plot training loss curves"""
-    plt.figure(figsize=(10, 6))
-    plt.plot(losses)
-    plt.title('Training Loss Over Time')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.grid(True)
-    plt.show()
-
 if __name__ == '__main__':
-    # Create line with graph states enabled
-    line = WaitingTime(use_graph_as_states=True)
+    line = WaitingTime(use_graph_as_states=True, step_size=100)
+    agent = make_optimal_agent(line)
+    collected_data = line.run(simulation_end=4000, agent=agent, visualize=False, collect_data=True)
+    print(line.get_n_parts_produced())
+
+
+# import numpy as np
+# import torch
+# from torch import nn
+# from torch.nn import Linear
+# from torch_geometric.nn import HGTConv
+# from torch_geometric.data import HeteroData
+# from typing import Dict, List, Tuple
+# import matplotlib.pyplot as plt
+# from lineflow.simulation import (
+#     Source,
+#     Sink,
+#     Line,
+#     Assembly,
+# )
+
+# # ...existing code (WTAssembly, WaitingTime classes)...
+
+# class GraphStateCollector:
+#     """Collects graph states and transitions for training"""
     
-    print("Collecting training data...")
-    collector = collect_training_data(line, num_episodes=5, steps_per_episode=50)
-    
-    print(f"Collected {len(collector.states)} state transitions")
-    
-    if len(collector.states) > 0:
-        print("Training state predictor...")
-        model, losses = train_state_predictor(collector, num_epochs=50)
+#     def __init__(self, line):
+#         self.line = line
+#         self.states = []
+#         self.next_states = []
+#         self.actions = []
+#         self.timesteps = []
         
-        if model is not None:
-            print("Evaluating model...")
-            evaluate_model(model, collector)
+#     def collect_transition(self, current_state: HeteroData, action: dict, next_state: HeteroData, timestep: int):
+#         """Collect a single transition"""
+#         self.states.append(self._clone_hetero_data(current_state))
+#         self.next_states.append(self._clone_hetero_data(next_state))
+#         self.actions.append(action.copy())
+#         self.timesteps.append(timestep)
+    
+#     def _clone_hetero_data(self, data: HeteroData) -> HeteroData:
+#         """Deep copy HeteroData"""
+#         new_data = HeteroData()
+#         for key, value in data.items():
+#             new_data[key] = value.clone() if hasattr(value, 'clone') else value
+#         return new_data
+    
+#     def get_dataset(self) -> Tuple[List[HeteroData], List[HeteroData], List[dict]]:
+#         """Return collected dataset"""
+#         return self.states, self.next_states, self.actions
+
+# class StatePredictor(torch.nn.Module):
+#     """GNN model to predict next states"""
+    
+#     def __init__(self, metadata, node_feature_dims: Dict[str, int]):
+#         super().__init__()
+#         self.hidden_channels = 64
+#         self.num_heads = 2
+#         self.num_layers = 2
+#         self.dropout = 0.1
+#         self.metadata = metadata
+        
+#         # Input projection layers
+#         self.lin_dict = torch.nn.ModuleDict()
+#         for node_type in metadata[0]:  # node_types
+#             self.lin_dict[node_type] = nn.Sequential(
+#                 Linear(node_feature_dims[node_type], self.hidden_channels),
+#                 nn.LayerNorm(self.hidden_channels),
+#                 nn.ReLU(),
+#                 nn.Dropout(self.dropout)
+#             )
+        
+#         # HGT encoder layers
+#         self.convs = torch.nn.ModuleList()
+#         self.norms = torch.nn.ModuleList()
+#         for _ in range(self.num_layers):
+#             conv = HGTConv(
+#                 self.hidden_channels, 
+#                 self.hidden_channels, 
+#                 metadata,
+#                 self.num_heads
+#             )
+#             self.convs.append(conv)
+#             self.norms.append(nn.LayerNorm(self.hidden_channels))
+        
+#         # State prediction heads for each node type
+#         self.prediction_heads = torch.nn.ModuleDict()
+#         for node_type in metadata[0]:
+#             self.prediction_heads[node_type] = nn.Sequential(
+#                 Linear(self.hidden_channels, self.hidden_channels),
+#                 nn.ReLU(),
+#                 nn.Dropout(self.dropout),
+#                 Linear(self.hidden_channels, node_feature_dims[node_type])
+#             )
+        
+#         self._init_weights()
+    
+#     def _init_weights(self):
+#         """Proper weight initialization"""
+#         for m in self.modules():
+#             if isinstance(m, Linear):
+#                 torch.nn.init.xavier_uniform_(m.weight)
+#                 if m.bias is not None:
+#                     torch.nn.init.zeros_(m.bias)
+    
+#     def forward(self, x_dict: Dict[str, torch.Tensor], edge_index_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+#         # Input projection
+#         x_dict = {
+#             node_type: self.lin_dict[node_type](x) 
+#             for node_type, x in x_dict.items()
+#         }
+        
+#         # HGT encoder layers with residual connections
+#         for conv, norm in zip(self.convs, self.norms):
+#             x_dict_new = conv(x_dict, edge_index_dict)
+#             # Apply residual connection and normalization
+#             x_dict = {
+#                 node_type: norm(x_dict_new[node_type] + x_dict[node_type])
+#                 for node_type in x_dict.keys()
+#             }
+        
+#         # State prediction
+#         predictions = {}
+#         for node_type, features in x_dict.items():
+#             predictions[node_type] = self.prediction_heads[node_type](features)
+        
+#         return predictions
+
+# def collect_training_data(line, num_episodes=10, steps_per_episode=100):
+#     """Collect training data by running simulation with various agents"""
+    
+#     collector = GraphStateCollector(line)
+    
+#     for episode in range(num_episodes):
+#         print(f"Collecting episode {episode + 1}/{num_episodes}")
+        
+#         # Reset line for new episode
+#         line.reset()
+        
+#         # Use random agent for data diversity
+#         def random_agent(state, env):
+#             waiting_times = line['S_component'].state['waiting_time'].categories
+#             actions = {}
+#             actions['S_component'] = {'waiting_time': np.random.choice(len(waiting_times))}
+#             return actions
+        
+#         # Run simulation and collect states
+#         current_state = None
+#         timestep = 0
+#         terminated = False
+#         while timestep < steps_per_episode and not terminated:
+#             # Get current graph state
+#             if hasattr(line, '_graph_states'):
+#                 current_graph_state = line._graph_states
+#             else:
+#                 # If graph states not available, skip
+#                 break
             
-            print("Plotting training curves...")
-            plot_training_curves(losses)
+#             # Get action from agent
+#             line_state = line.state
+#             action = random_agent(line_state, line.env)
             
-            # Save model
-            torch.save(model.state_dict(), 'state_predictor.pth')
-            print("Model saved as 'state_predictor.pth'")
-    else:
-        print("No training data collected. Check if graph states are properly enabled.")
+#             # Store current state
+#             if current_state is not None:
+#                 collector.collect_transition(
+#                     current_state, 
+#                     previous_action, 
+#                     current_graph_state, 
+#                     timestep
+#                 )
+            
+#             # Apply action and step
+#             line.step(action)
+            
+#             # Update for next iteration
+#             current_state = current_graph_state
+#             previous_action = action
+#             timestep += 1
+    
+#     return collector
+
+# def train_state_predictor(collector: GraphStateCollector, num_epochs=100):
+#     """Train the state prediction model"""
+    
+#     states, next_states, actions = collector.get_dataset()
+    
+#     if len(states) == 0:
+#         print("No training data collected!")
+#         return None
+    
+#     # Get metadata from first state
+#     sample_state = states[0]
+#     metadata = sample_state.metadata()
+    
+#     # Calculate node feature dimensions
+#     node_feature_dims = {}
+#     for node_type in metadata[0]:
+#         if node_type in sample_state.x_dict:
+#             node_feature_dims[node_type] = sample_state.x_dict[node_type].shape[1]
+    
+#     # Create model
+#     model = StatePredictor(metadata, node_feature_dims)
+#     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+#     criterion = nn.MSELoss()
+    
+#     # Training loop
+#     losses = []
+    
+#     for epoch in range(num_epochs):
+#         epoch_loss = 0.0
+#         num_batches = 0
+        
+#         # Simple batch processing (can be improved with DataLoader)
+#         for i in range(len(states)):
+#             current_state = states[i]
+#             target_state = next_states[i]
+            
+#             # Forward pass
+#             optimizer.zero_grad()
+#             predictions = model(current_state.x_dict, current_state.edge_index_dict)
+            
+#             # Calculate loss for each node type
+#             total_loss = 0
+#             for node_type in predictions.keys():
+#                 if node_type in target_state.x_dict:
+#                     pred = predictions[node_type]
+#                     target = target_state.x_dict[node_type]
+#                     loss = criterion(pred, target)
+#                     total_loss += loss
+            
+#             # Backward pass
+#             if total_loss > 0:
+#                 total_loss.backward()
+#                 optimizer.step()
+#                 epoch_loss += total_loss.item()
+#                 num_batches += 1
+        
+#         avg_loss = epoch_loss / max(num_batches, 1)
+#         losses.append(avg_loss)
+        
+#         if epoch % 10 == 0:
+#             print(f"Epoch {epoch}, Average Loss: {avg_loss:.6f}")
+    
+#     return model, losses
+
+# def evaluate_model(model, collector: GraphStateCollector):
+#     """Evaluate the trained model"""
+    
+#     states, next_states, _ = collector.get_dataset()
+    
+#     if len(states) == 0:
+#         print("No data to evaluate!")
+#         return
+    
+#     model.eval()
+#     total_error = 0.0
+#     num_predictions = 0
+    
+#     with torch.no_grad():
+#         for i in range(len(states)):
+#             current_state = states[i]
+#             target_state = next_states[i]
+            
+#             predictions = model(current_state.x_dict, current_state.edge_index_dict)
+            
+#             # Calculate mean absolute error
+#             for node_type in predictions.keys():
+#                 if node_type in target_state.x_dict:
+#                     pred = predictions[node_type]
+#                     target = target_state.x_dict[node_type]
+#                     error = torch.mean(torch.abs(pred - target))
+#                     total_error += error.item()
+#                     num_predictions += 1
+    
+#     avg_error = total_error / max(num_predictions, 1)
+#     print(f"Average Prediction Error: {avg_error:.6f}")
+    
+#     return avg_error
+
+# def plot_training_curves(losses):
+#     """Plot training loss curves"""
+#     plt.figure(figsize=(10, 6))
+#     plt.plot(losses)
+#     plt.title('Training Loss Over Time')
+#     plt.xlabel('Epoch')
+#     plt.ylabel('Loss')
+#     plt.grid(True)
+#     plt.show()
+
+# if __name__ == '__main__':
+#     # Create line with graph states enabled
+#     line = WaitingTime(use_graph_as_states=True)
+    
+#     print("Collecting training data...")
+#     collector = collect_training_data(line, num_episodes=5, steps_per_episode=50)
+    
+#     print(f"Collected {len(collector.states)} state transitions")
+    
+#     if len(collector.states) > 0:
+#         print("Training state predictor...")
+#         model, losses = train_state_predictor(collector, num_epochs=50)
+        
+#         if model is not None:
+#             print("Evaluating model...")
+#             evaluate_model(model, collector)
+            
+#             print("Plotting training curves...")
+#             plot_training_curves(losses)
+            
+#             # Save model
+#             torch.save(model.state_dict(), 'state_predictor.pth')
+#             print("Model saved as 'state_predictor.pth'")
+#     else:
+#         print("No training data collected. Check if graph states are properly enabled.")
