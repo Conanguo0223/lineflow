@@ -26,10 +26,15 @@ from torch_geometric.nn import (
 )
 from torch.nn import Linear
 
+from lineflow.examples.waiting_time import WaitingTime
 from lineflow.helpers import get_device
 from lineflow.learning.helpers import make_stacked_vec_env
 from lineflow.learning.curriculum import CurriculumLearningCallback
-from lineflow.examples import WaitingTime
+from lineflow.examples import (
+    WaitingTime,
+    ComplexLine,
+    MultiProcess
+)
 
 import wandb
 from wandb.integration.sb3 import WandbCallback
@@ -208,35 +213,39 @@ class ImprovedAgent(nn.Module):
 class GraphObservationProcessor:
     """Handles graph observation processing and encoding"""
     
-    def __init__(self, graph_encoder: ImprovedHGT, device: torch.device, target_node_type: str = 'Source', target_node_idx: int = 1):
+    def __init__(
+        self, 
+        graph_encoder: ImprovedHGT, 
+        device: torch.device, 
+        target_nodes: Optional[Dict[str, list]] = None
+    ):
+        """
+        target_nodes: Dict mapping node_type to list of indices to extract features from.
+        Example: {'Switch': [1, 2], 'Buffer': [0]}
+        """
         self.graph_encoder = graph_encoder
         self.device = device
-        self.target_node_type = target_node_type
-        self.target_node_idx = target_node_idx
-    
+        self.target_nodes = target_nodes if target_nodes is not None else {'Switch': [1]}
+
     def process_observation(self, obs: HeteroData) -> torch.Tensor:
-        """Process HeteroData observation into encoded features"""
+        """Process HeteroData observation into encoded features for multiple node types and indices"""
         if not isinstance(obs, HeteroData):
             raise ValueError(f"Expected HeteroData, got {type(obs)}")
         
-        # Move to device
         obs = obs.to(self.device)
-        
-        # Encode through graph network
         with torch.no_grad():
             encoded_dict = self.graph_encoder(obs.x_dict, obs.edge_index_dict)
-            
-            # Extract target node features
-            if self.target_node_type not in encoded_dict:
-                raise ValueError(f"Target node type '{self.target_node_type}' not found in encoded graph")
-            
-            target_features = encoded_dict[self.target_node_type]
-            
-            # Handle indexing safely
-            if target_features.shape[0] <= self.target_node_idx:
-                raise ValueError(f"Target node index {self.target_node_idx} out of bounds for node type '{self.target_node_type}'")
-            
-            return target_features[self.target_node_idx].unsqueeze(0)
+            features = []
+            for node_type, indices in self.target_nodes.items():
+                if node_type not in encoded_dict:
+                    raise ValueError(f"Target node type '{node_type}' not found in encoded graph")
+                node_features = encoded_dict[node_type]
+                for idx in indices:
+                    if idx >= node_features.shape[0]:
+                        raise ValueError(f"Target node index {idx} out of bounds for node type '{node_type}'")
+                    features.append(node_features[idx])
+            # Stack all selected node features into a single tensor
+            return torch.stack(features)
 
 
 class PPOTrainer:
@@ -281,9 +290,25 @@ class PPOTrainer:
         np.random.seed(self.config.seed)
         torch.manual_seed(self.config.seed)
         torch.backends.cudnn.deterministic = self.config.torch_deterministic
-        
+        n_cells = 5
         # Create environment
-        line = WaitingTime(use_graph_as_states=True, step_size=100)
+        # line = ComplexLine(
+        #     alternate=False,
+        #     n_assemblies=n_cells,
+        #     n_workers=3*n_cells,
+        #     scrap_factor=1/n_cells,
+        #     step_size=10,
+        #     info=[],
+        #     use_graph_as_states=True,
+        #     )
+        line = MultiProcess(
+            alternate=False,
+            n_processes=n_cells,
+            step_size=10,
+            info=[('SwitchD', 'index_buffer_out')],
+            use_graph_as_states=True,
+        )
+        # line = WaitingTime(use_graph_as_states=True, step_size=100)
         self.envs = make_stacked_vec_env(
             line=line,
             simulation_end=4000,
@@ -320,7 +345,8 @@ class PPOTrainer:
         # Setup observation processor
         self.obs_processor = GraphObservationProcessor(
             self.graph_encoder, 
-            self.device
+            self.device,
+            target_nodes={'Switch': [0,1]}  # Example target nodes
         )
         
         # Setup optimizer with both networks
@@ -338,13 +364,18 @@ class PPOTrainer:
     
     def _setup_storage(self):
         """Setup storage buffers"""
-        self.obs = torch.zeros((self.config.num_steps, self.config.num_envs, self.config.hidden_channels)).to(self.device)
-        self.actions = torch.zeros((self.config.num_steps, self.config.num_envs), dtype=torch.long).to(self.device)
-        self.logprobs = torch.zeros((self.config.num_steps, self.config.num_envs)).to(self.device)
-        self.rewards = torch.zeros((self.config.num_steps, self.config.num_envs)).to(self.device)
-        self.dones = torch.zeros((self.config.num_steps, self.config.num_envs)).to(self.device)
-        self.values = torch.zeros((self.config.num_steps, self.config.num_envs)).to(self.device)
-    
+        # If your obs have multiple node features (e.g., for two target nodes), 
+        # obs shape should be (num_steps, num_envs, num_target_nodes, hidden_channels)
+        num_target_nodes = sum(len(indices) for indices in self.obs_processor.target_nodes.values())
+        self.obs = torch.zeros(
+            (self.config.num_steps, self.config.num_envs, num_target_nodes, self.config.hidden_channels)
+        ).to(self.device)
+        self.actions = torch.zeros((self.config.num_steps, self.config.num_envs, num_target_nodes), dtype=torch.long).to(self.device)
+        self.logprobs = torch.zeros((self.config.num_steps, self.config.num_envs, num_target_nodes)).to(self.device)
+        self.rewards = torch.zeros((self.config.num_steps, self.config.num_envs, num_target_nodes)).to(self.device)
+        self.dones = torch.zeros((self.config.num_steps, self.config.num_envs, num_target_nodes)).to(self.device)
+        self.values = torch.zeros((self.config.num_steps, self.config.num_envs, num_target_nodes)).to(self.device)
+
     def train(self):
         """Main training loop"""
         # Initialize environment

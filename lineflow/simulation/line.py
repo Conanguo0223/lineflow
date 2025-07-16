@@ -153,17 +153,47 @@ class Line:
                         'source': source_node,
                         'target': target_node,
                         'buffer': obj_name,
+                        'type': 'connects_to',
                         'attributes': self._objects[obj_name].state.values
                     })
             else:
                 # it's a node
-                node_info = {
-                    'name': obj_name,
-                    'type': type(obj).__name__,
-                    'feature': self._objects[obj_name].state.values
-                }
-                
-                node_info['node_properties'] = self._extract_component_properties(obj)
+                if type(obj).__name__ == 'WorkerPool':
+                    # WorkerPool is a special case, we want to treat it as a nod
+                    node_info = {
+                        'name': obj_name,
+                        'type': type(obj).__name__,
+                        'feature': self._objects[obj_name].state.values
+                    }
+                    for worker_name, worker in obj.workers.items():
+                        nodes[worker_name] = {
+                            'name': worker_name,
+                            'type': 'Worker',
+                            'feature': [worker.state.value, worker.transition_time]
+                        }
+                        
+                        # Connect pool to workers
+                        edges.append({
+                            'source': obj_name,
+                            'target': worker_name,
+                            'type': 'manages'
+                        })
+                        
+                        # Connect workers to their assigned stations
+                        assigned_station = obj.stations[worker.state.value].name
+                        edges.append({
+                            'source': worker_name,
+                            'target': assigned_station,
+                            'type': 'assigned_to'
+                        })
+                else:
+                    node_info = {
+                        'name': obj_name,
+                        'type': type(obj).__name__,
+                        'feature': self._objects[obj_name].state.values
+                    }
+                    
+                    node_info['node_properties'] = self._extract_component_properties(obj)
 
                 nodes[obj_name] = node_info
         return nodes, edges
@@ -263,7 +293,7 @@ class Line:
             target_name = edge_data['target']
             source_type = node_mapping[source_name][0]
             target_type = node_mapping[target_name][0]
-            edge_type = (source_type, 'connects_to', target_type)
+            edge_type = (source_type, edge_data['type'], target_type)
             if edge_type not in edge_types:
                 edge_types[edge_type] = []
                 edge_attrs[edge_type] = []
@@ -482,6 +512,14 @@ class Line:
                 tgt_idx = edge_index[1, i].item()
                 src_name = self.node_types[source_type][src_idx][0]
                 tgt_name = self.node_types[target_type][tgt_idx][0]
+                # check if tgt_name is Worker
+                if src_name.startswith("W") and src_name[1:].isdigit():
+                    # src_name looks like "W" followed by a number
+                    continue
+                if tgt_name.startswith("W") and tgt_name[1:].isdigit():
+                    # tgt_name looks like "W" followed by a number
+                    continue
+                
                 edge_name = f"Buffer_{src_name}_to_{tgt_name}"
                 self._graph_states[edge_type].edge_attr[i] = torch.tensor(self._objects[edge_name].state.values, dtype=torch.float)
                 
