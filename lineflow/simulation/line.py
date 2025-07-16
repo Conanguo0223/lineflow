@@ -170,10 +170,7 @@ class Line:
                         'feature': features
                     }
                     for worker_name, worker in obj.workers.items():
-                        features = worker.state.values
-                        observables = worker.state.observables
-                        # Only keep observables
-                        features = np.array(features, dtype=np.float32)[observables]
+                        features = worker.state.value
                         worker_features = [features, worker.transition_time]
                         nodes[worker_name] = {
                             'name': worker_name,

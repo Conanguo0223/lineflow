@@ -170,13 +170,31 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
         torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
+def group_indexes_by_type(node_types_list):
+    """
+    Groups indexes by node type from a list of node type names.
+    
+    Args:
+        node_types_list: List of node type strings
+    
+    Returns:
+        Dictionary mapping node type to list of indexes
+    """
+    type_indexes = {}
+    
+    for index, node_type in enumerate(node_types_list):
+        if node_type not in type_indexes:
+            type_indexes[node_type] = []
+        type_indexes[node_type].append(index)
+    
+    return type_indexes
 
 class ImprovedAgent(nn.Module):
     """Enhanced agent with better architecture and regularization"""
-    
-    def __init__(self, config: PPOConfig, action_dim: int):
+
+    def __init__(self, type: str, config: PPOConfig, action_dim: int):
         super().__init__()
-        
+        self.type = type
         # Critic network
         self.critic = nn.Sequential(
             layer_init(nn.Linear(config.hidden_channels, config.critic_hidden_dim)),
@@ -292,15 +310,15 @@ class PPOTrainer:
         torch.backends.cudnn.deterministic = self.config.torch_deterministic
         n_cells = 5
         # Create environment
-        # line = ComplexLine(
-        #     alternate=False,
-        #     n_assemblies=n_cells,
-        #     n_workers=3*n_cells,
-        #     scrap_factor=1/n_cells,
-        #     step_size=10,
-        #     info=[],
-        #     use_graph_as_states=True,
-        #     )
+        line = ComplexLine(
+            alternate=False,
+            n_assemblies=n_cells,
+            n_workers=3*n_cells,
+            scrap_factor=1/n_cells,
+            step_size=10,
+            info=[],
+            use_graph_as_states=True,
+            )
         # line = MultiProcess(
         #     alternate=False,
         #     n_processes=n_cells,
@@ -308,7 +326,7 @@ class PPOTrainer:
         #     info=[('SwitchD', 'index_buffer_out')],
         #     use_graph_as_states=True,
         # )
-        line = WaitingTime(use_graph_as_states=True, step_size=10)
+        # line = WaitingTime(use_graph_as_states=True, step_size=10)
         self.envs = make_stacked_vec_env(
             line=line,
             simulation_end=4000,
@@ -337,21 +355,43 @@ class PPOTrainer:
             node_feature_dims
         ).to(self.device)
         
-        self.agent = ImprovedAgent(
-            self.config, 
-            self.envs.action_space.nvec[0]
-        ).to(self.device)
+        # self.agent = ImprovedAgent(
+        #     self.config, 
+        #     self.envs.action_space.nvec[0]
+        # ).to(self.device)
+        actionable_nodes = [s for s, b in zip(self.envs.line.state.feature_names, self.envs.line.state.actionables) if b]
+        actionable_node_names = [s.split('_')[0] for s in actionable_nodes]
+        actionable_nodes = [self.envs.line.node_mapping[t] for t in actionable_node_names]
         
+        # Group indices by node type
+        target_nodes = {}
+        for node_type, index in actionable_nodes:
+            if node_type not in target_nodes:
+                target_nodes[node_type] = []
+            if index not in target_nodes[node_type]:
+                target_nodes[node_type].append(index)
         # Setup observation processor
         self.obs_processor = GraphObservationProcessor(
             self.graph_encoder, 
             self.device,
             # target_nodes={'Switch': [0,1]}  # Example target nodes
-            target_nodes={'Source': [1]}  # Only process 'S_component' node type
+            target_nodes=target_nodes  # Only process 'S_component' node type
         )
-        
+        target_nodes = group_indexes_by_type(actionable_node_names)
+        agent_list = []
+        # TODO: make this smarter, currently only uses the first action dim for the agents, might have different types?
+        for node_type in target_nodes.keys():
+            agent_list.append(ImprovedAgent(
+                type=node_type,
+                config=self.config,
+                action_dim=self.envs.action_space.nvec[target_nodes[node_type][0]]
+            ).to(self.device))
         # Setup optimizer with both networks
-        all_params = list(self.agent.parameters()) + list(self.graph_encoder.parameters())
+        self.agent_list = agent_list
+        all_params = []
+        for agent in self.agent_list:
+            all_params += list(agent.parameters())
+        all_params += list(self.graph_encoder.parameters())
         self.optimizer = optim.Adam(all_params, lr=self.config.learning_rate, eps=1e-5)
         
         # Setup learning rate scheduler
