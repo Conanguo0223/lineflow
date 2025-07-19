@@ -135,7 +135,7 @@ class WaitingTime(Line):
     def build(self):
 
         source_main = Source(
-            'S_main',
+            'Source_main',
             position=(300, 300),
             processing_time=0,
             carrier_capacity=2,
@@ -144,7 +144,7 @@ class WaitingTime(Line):
         )
 
         source_component = Source(
-            'S_component',
+            'Source_component',
             position=(500, 450),
             processing_time=self.processing_time_source,
             waiting_time=0,

@@ -455,7 +455,15 @@ class PPOTrainer:
             step_size=10,
             info=[],
             use_graph_as_states=True,
-        )
+            )
+        # line = MultiProcess(
+        #     alternate=False,
+        #     n_processes=n_cells,
+        #     step_size=10,
+        #     info=[('SwitchD', 'index_buffer_out')],
+        #     use_graph_as_states=True,
+        # )
+        # line = WaitingTime(use_graph_as_states=True, step_size=10)
         
         self.envs = make_stacked_vec_env(
             line=line,
