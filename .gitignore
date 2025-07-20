@@ -50,6 +50,7 @@ site/*
 #.jupyter/*
 #*.ipynb
 runs
+data
 
 # VSCode
 .vscode/*
