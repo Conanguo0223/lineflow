@@ -320,6 +320,16 @@ class Station(StationaryObject):
         self.env = env
         self.env.process(self.run())
 
+        # Start continuous throughput monitoring
+        self.env.process(self._throughput_monitoring_loop())
+    
+    def _throughput_monitoring_loop(self):
+        """Continuously update throughput metrics"""
+        while True:
+            if hasattr(self, 'state'):
+                self._update_throughput_metrics()
+            yield self.env.timeout(1)  # Update every simulation time unit
+
     def _derive_actions_from_new_state(self, state):
         # Turn machine back on if needed
         if not self.is_on() and 'on' in state and hasattr(self, 'turn_off_event') and state['on'] == 0:
@@ -354,11 +364,6 @@ class Station(StationaryObject):
             self.current_window_carriers = 0
             self.current_window_parts = 0
             
-            # Update state with latest throughput rate
-            if hasattr(self, 'state') and 'throughput_rate' in self.state.names:
-                latest_rate = self.throughput_history[-1]['throughput_rate']
-                self.state['throughput_rate'].update(latest_rate)
-        
         # Record current event
         self.current_window_carriers += 1
         if hasattr(carrier, 'parts'):
@@ -366,10 +371,6 @@ class Station(StationaryObject):
         else:
             self.current_window_parts += 1
         
-        # Update current window state
-        if hasattr(self, 'state') and 'current_window_throughput' in self.state.names:
-            self.state['current_window_throughput'].update(self.current_window_carriers)
-    
     def get_throughput_for_period(self, start_time, end_time):
         """Get throughput data for a specific time period"""
         relevant_windows = []
@@ -381,6 +382,26 @@ class Station(StationaryObject):
     def get_recent_throughput(self, time_periods=5):
         """Get throughput for the last N time periods"""
         return self.throughput_history[-time_periods:] if len(self.throughput_history) >= time_periods else self.throughput_history
+
+    def _update_throughput_metrics(self):
+        """Update rolling throughput metrics"""
+        # Update current window throughput immediately
+        if hasattr(self, 'state') and 'current_window_throughput' in self.state.names:
+            self.state['current_window_throughput'].update(self.current_window_carriers)
+        
+        # Calculate current rate based on elapsed time in current window
+        current_time = self.env.now
+        if current_time > self.window_start_time:
+            elapsed_time = current_time - self.window_start_time
+            current_rate = self.current_window_carriers / elapsed_time
+            if hasattr(self, 'state') and 'throughput_rate' in self.state.names:
+                self.state['throughput_rate'].update(current_rate)
+        
+        # Update rolling averages from completed windows
+        recent_windows = self.get_recent_throughput(5)
+        if recent_windows and hasattr(self, 'state') and 'avg_throughput_last_5_windows' in self.state.names:
+            avg_rate = sum(w['throughput_rate'] for w in recent_windows) / len(recent_windows)
+            self.state['avg_throughput_last_5_windows'].update(avg_rate)
 
 class Assembly(Station):
     """
@@ -553,14 +574,6 @@ class Assembly(Station):
             else:
                 yield self.turn_off()
 
-    def _update_throughput_metrics(self):
-        """Update rolling throughput metrics"""
-        recent_windows = self.get_recent_throughput(5)
-        if recent_windows:
-            avg_rate = sum(w['throughput_rate'] for w in recent_windows) / len(recent_windows)
-            self.state['avg_throughput_last_5_windows'].update(avg_rate)
-
-
 class Process(Station):
     '''
     Process stations take a carrier as input, process the carrier, and push it onto buffer_out
@@ -606,12 +619,19 @@ class Process(Station):
             TokenState(name='carrier', is_observable=False),
             NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),
             CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
+            # Time-based throughput metrics
+            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
+            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
         )
         self.state['on'].update(True)
         self.state['mode'].update("waiting")
         self.state['carrier'].update(None)
         self.state['processing_time'].update(self.processing_time)
         self.state['n_workers'].update(self.n_workers)
+        self.state['throughput_rate'].update(0.0)
+        self.state['current_window_throughput'].update(0)
+        self.state['avg_throughput_last_5_windows'].update(0.0)
 
     def _draw_info(self, screen):
         self._draw_n_workers(screen)
@@ -640,6 +660,12 @@ class Process(Station):
                 # Release workers
                 self.release_workers()
 
+                # Record time-based throughput
+                self._record_throughput_time_based(carrier)
+                
+                # Update moving averages
+                self._update_throughput_metrics()
+
                 # Wait to place carrier to buffer_out
                 yield self.env.process(self.set_to_waiting())
                 yield self.env.process(self.buffer_out(carrier))
@@ -655,7 +681,7 @@ class Source(Station):
 
     The Source takes carriers from buffer_in, creates a part, places that part
     onto the carrier, and pushes the carrier onto the buffer_out.
-    If unlimited carriers is True, no buffer_in is needed and no magazine.
+    If unlimited_carriers is True, no buffer_in is needed and no magazine.
 
     Args:
         name (str): Name of the Cell
@@ -736,7 +762,7 @@ class Source(Station):
 
         self.state = ObjectStates(
             DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-            DiscreteState('mode', categories=['working', 'waiting', 'failing'], is_observable=False),
+            DiscreteState('mode', categories=['working', 'waiting', 'failing']),
             DiscreteState(
                 name='waiting_time', 
                 categories=np.arange(0, 100, self.waiting_time_step), 
@@ -750,6 +776,10 @@ class Source(Station):
                 is_actionable=False,
                 is_observable=True,
             ),
+            # Time-based throughput metrics
+            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
+            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
         )
 
         self.state['waiting_time'].update(self.init_waiting_time)
@@ -758,6 +788,9 @@ class Source(Station):
         self.state['carrier'].update(None)
         self.state['part'].update(None)
         self.state['carrier_spec'].update(list(self.carrier_specs.keys())[0])
+        self.state['throughput_rate'].update(0.0)
+        self.state['current_window_throughput'].update(0)
+        self.state['avg_throughput_last_5_windows'].update(0.0)
 
     def _assert_init_args(self, unlimited_carriers, carrier_capacity, buffer_in):
         if unlimited_carriers:
@@ -855,6 +888,12 @@ class Source(Station):
                 yield self.env.process(self.set_to_work())
                 carrier = yield self.env.process(self.assemble_carrier(carrier))
 
+                # Record time-based throughput
+                self._record_throughput_time_based(carrier)
+                
+                # Update moving averages
+                self._update_throughput_metrics()
+
                 yield self.env.process(self.set_to_waiting())
                 yield self.env.process(self.buffer_out(carrier))
                 self.state['part'].update(None)
@@ -898,9 +937,13 @@ class Sink(Station):
 
         self.state = ObjectStates(
             DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-            DiscreteState('mode', categories=['working', 'waiting', 'failing'], is_observable=False),
-            CountState('n_parts_produced', is_actionable=False, is_observable=True),
+            DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+            CountState('n_parts_produced', is_actionable=False, is_observable=False),
             TokenState(name='carrier', is_observable=False),
+            # Time-based throughput metrics
+            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
+            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
         )
 
         self.state['on'].update(True)
@@ -908,6 +951,9 @@ class Sink(Station):
         self.state['n_parts_produced'].update(0)
         self.state['mode'].update("waiting")
         self.state['carrier'].update(None)
+        self.state['throughput_rate'].update(0.0)
+        self.state['current_window_throughput'].update(0)
+        self.state['avg_throughput_last_5_windows'].update(0.0)
 
     def remove(self, carrier):
 
@@ -934,6 +980,13 @@ class Sink(Station):
 
                 # Wait to place carrier to buffer_out
                 yield self.env.process(self.remove(carrier))
+
+                # Record time-based throughput
+                self._record_throughput_time_based(carrier)
+                
+                # Update moving averages
+                self._update_throughput_metrics()
+
                 self.state['carrier'].update(None)
 
             else:
@@ -1000,12 +1053,19 @@ class Switch(Station):
                 categories=list(range(self.n_buffers_out)),
                 is_actionable=not self.alternate and self.n_buffers_out > 1),
             TokenState(name='carrier', is_observable=False),
+            # Time-based throughput metrics
+            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
+            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
         )
         self.state['index_buffer_in'].update(0)
         self.state['index_buffer_out'].update(0)
         self.state['on'].update(True)
         self.state['mode'].update("waiting")
         self.state['carrier'].update(None)
+        self.state['throughput_rate'].update(0.0)
+        self.state['current_window_throughput'].update(0)
+        self.state['avg_throughput_last_5_windows'].update(0.0)
 
     @property
     def n_buffers_in(self):
@@ -1100,6 +1160,12 @@ class Switch(Station):
 
                 yield self.env.process(self.put(carrier))
 
+                # Record time-based throughput
+                self._record_throughput_time_based(carrier)
+                
+                # Update moving averages
+                self._update_throughput_metrics()
+
                 if self.alternate:
                     self._alternate_indices()
 
@@ -1172,6 +1238,10 @@ class Magazine(Station):
             CountState('carriers_in_magazine', is_actionable=self.actionable_magazine, is_observable=True),
             TokenState(name='carrier', is_observable=False),
             TokenState(name='part', is_observable=False),
+            # Time-based throughput metrics
+            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
+            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
         )
 
         self.state['carriers_in_magazine'].update(self.init_carriers_in_magazine)
@@ -1179,6 +1249,10 @@ class Magazine(Station):
         self.state['mode'].update("waiting")
         self.state['carrier'].update(None)
         self.state['part'].update(None)
+        self.state['throughput_rate'].update(0.0)
+        self.state['current_window_throughput'].update(0)
+        self.state['avg_throughput_last_5_windows'].update(0.0)
+
 
     def _assert_init_args(self, buffer_in, unlimited_carriers, carriers_in_magazine, carrier_capacity):
         if carrier_capacity > 15:
@@ -1293,9 +1367,46 @@ class Magazine(Station):
                 yield self.env.process(self.set_to_work())
                 carrier = yield self.env.process(self.get_carrier())
 
+                # Record time-based throughput
+                self._record_throughput_time_based(carrier)
+                
+                # Update moving averages
+                self._update_throughput_metrics()
+                
                 # Wait to place carrier to buffer_out
                 yield self.env.process(self.set_to_waiting())
                 yield self.env.process(self.buffer_out(carrier))
                 self.state['carrier'].update(None)
             else:
                 yield self.turn_off()
+##
+'''
+Assembly:
+observation:['mode','n_scrap_parts','n_workers','processing_time']
+actions: non-actionable station
+
+Process:
+observation:['mode','n_workers','processing_time']
+actions: non-actionable station
+
+Source:
+observation:['mode','waiting_time','carrier_spec']
+actions: ['waiting_time']
+
+Sink:
+observation:['mode']
+actions: non-actionable station
+
+Switch:
+observation:['mode','index_buffer_in','index_buffer_out']
+actions: ['index_buffer_in','index_buffer_out']
+
+Magazine:
+observation:['mode','carriers_in_magazine']
+actions: ['carriers_in_magazine']
+
+WorkerPool:
+observation:['throughput']*n_stations # should it be the performance of each of the machines
+actions: ['index_station']*n_workers
+
+'''

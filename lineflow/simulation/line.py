@@ -159,39 +159,25 @@ class Line:
             else:
                 # it's a node
                 if type(obj).__name__ == 'WorkerPool':
-                    features = self._objects[obj_name].state.values
-                    observables = self._objects[obj_name].state.observables
-                    # Only keep observables
-                    features = np.array(features, dtype=np.float32)[observables]
+                    # first connect to the stations, then get the stations status for the observation
+                    # workerpool features
+                    # [n_workers, station_performance * n_stations]
+                    features = [len(self._objects[obj_name]._worker_names)]
+                    connected_stations = self._objects[obj_name]._station_names
+                    for station_name in connected_stations:
+                        # for each connected station, create an edge, and save the feature
+                        edges.append({
+                            'source': obj_name,
+                            'target': station_name,
+                            'type': 'assigned_to'
+                        })
+                        features.append(self._objects[station_name].state['throughput_rate'].value)
                     # WorkerPool is a special case, we want to treat it as a nod
                     node_info = {
                         'name': obj_name,
                         'type': type(obj).__name__,
                         'feature': features
                     }
-                    for worker_name, worker in obj.workers.items():
-                        features = worker.state.value
-                        worker_features = [features, worker.transition_time]
-                        nodes[worker_name] = {
-                            'name': worker_name,
-                            'type': 'Worker',
-                            'feature': worker_features
-                        }
-                        
-                        # Connect pool to workers
-                        edges.append({
-                            'source': obj_name,
-                            'target': worker_name,
-                            'type': 'manages'
-                        })
-                        
-                        # Connect workers to their assigned stations
-                        assigned_station = obj.stations[worker.state.value].name
-                        edges.append({
-                            'source': worker_name,
-                            'target': assigned_station,
-                            'type': 'assigned_to'
-                        })
                 else:
                     features = self._objects[obj_name].state.values
                     observables = self._objects[obj_name].state.observables
@@ -504,20 +490,30 @@ class Line:
         # update node features
         for node_name, (node_type, node_idx) in self.node_mapping.items():
             obj = self._objects.get(node_name)
-            if obj:
+            if type(obj).__name__ == 'WorkerPool':
+                # special case for WorkerPool, need to update the connected stations performance
+                connected_stations = obj._station_names
+                features = [len(obj._worker_names)]
+                for station_name in connected_stations:
+                    features.append(self._objects[station_name].state['throughput_rate'].value)
+                features = np.array(features, dtype=np.float32)
+                new_feature = torch.tensor(features, dtype=torch.float)
+                self._graph_states[node_type].x[node_idx] = new_feature
+            elif obj:
                 # Only keep state_values where observables is True
                 state_values = np.array(obj.state.values, dtype=np.float32)
                 observables = np.array(obj.state.observables, dtype=bool)
                 filtered_values = state_values[observables]
                 new_feature = torch.tensor(filtered_values, dtype=torch.float)
                 self._graph_states[node_type].x[node_idx] = new_feature
+            
         # update edge attributes if any
         for edge_type in self._graph_states.edge_types:
             source_type = edge_type[0]
             target_type = edge_type[2]
             
             edge_index = self._graph_states[edge_type].edge_index
-            if source_type == target_type:
+            if source_type == target_type or source_type == 'WorkerPool' or target_type == 'WorkerPool':
                 # self-loop edges
                 continue
             # edge_index shape: [2, num_edges], so iterate over columns
