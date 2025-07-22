@@ -69,12 +69,16 @@ class Buffer(Connector):
         self.state = ObjectStates(
             DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
             NumericState(name='fill', vmin=0, vmax=1, is_observable=True, is_actionable=False),
-            NumericState(name='transition_time', vmin=self.min_transition_time, is_observable=True, is_actionable=self.controllable_transition_time),
+            # NumericState(name='transition_time', vmin=self.min_transition_time, is_observable=True, is_actionable=self.controllable_transition_time),
+            DiscreteState('transition_time', is_actionable=self.controllable_transition_time, is_observable=True, categories=np.arange(self.min_transition_time, 100, 1.0),)
         )
 
         self.state['on'].update(True)
         self.state['fill'].update(0)
         self.state['transition_time'].update(self.transition_time)
+    
+    def apply(self, actions):
+        self.state.apply(actions)
 
     @property
     def n_carriers(self):

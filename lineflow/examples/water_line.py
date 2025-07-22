@@ -17,10 +17,10 @@ class WaterLine(Line):
         # buffer_3 = Buffer('Buffer3', capacity=50, transition_time=5)
         # buffer_4 = Buffer('Buffer4', capacity=50, transition_time=5)
         processing_times = [
-            2,  # Blow Molding
-            2,  # Clean Fill
+            20,  # Blow Molding
+            20,  # Clean Fill
             12,  # Wrap Heat
-            2,  # Robo Arm
+            20,  # Robo Arm
         ]
 
         source_main = Source(
@@ -36,7 +36,7 @@ class WaterLine(Line):
             'Blow_Molding',
             processing_time=processing_times[0],
             min_processing_time=2,
-            actionable_processing_time=False,
+            actionable_processing_time=True,
             position=(300, 250)
         )
 
@@ -44,7 +44,7 @@ class WaterLine(Line):
             'Clean_Fill',
             processing_time=processing_times[1],
             min_processing_time=2,
-            actionable_processing_time=False,
+            actionable_processing_time=True,
             position=(500, 250)
         )
 
@@ -52,7 +52,7 @@ class WaterLine(Line):
             'Wrap_Heat',
             processing_time=processing_times[2],
             min_processing_time=6,
-            actionable_processing_time=False,
+            actionable_processing_time=True,
             processing_std=0.8,
             position=(700, 250)
         )
@@ -61,7 +61,7 @@ class WaterLine(Line):
             'Robo_Arm',
             processing_time=processing_times[3],
             min_processing_time=2,
-            actionable_processing_time=False,
+            actionable_processing_time=True,
             position=(900, 250)
         )
 
@@ -140,6 +140,7 @@ class WaterLine(Line):
 
 if __name__ == '__main__':
     line = WaterLine(use_graph_as_states=True)
-    line.run(simulation_end=4000, visualize=True, capture_screen=False)
+    line.run(simulation_end=4000, visualize=False, capture_screen=False)
 
     print(line.get_n_parts_produced())
+    print(line.get_n_scrap_parts())

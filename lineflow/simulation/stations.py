@@ -620,9 +620,9 @@ class Process(Station):
             DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
             DiscreteState('mode', categories=['working', 'waiting', 'failing']),
             TokenState(name='carrier', is_observable=False),
-            NumericState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, vmin=self.min_processing_time),
+            # NumericState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, vmin=self.min_processing_time),
+            DiscreteState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, categories=np.arange(self.min_processing_time, 100, 1.0),),
             CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
-            # Time-based throughput metrics
             NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
             CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
             NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
@@ -657,6 +657,8 @@ class Process(Station):
                     scale=self.processing_std,
                     rework_probability=self.rework_probability,
                 )
+                ## just testing
+                processing_time = int(processing_time)
                 yield self.env.timeout(processing_time)
                 self.state['processing_time'].update(processing_time)
 
