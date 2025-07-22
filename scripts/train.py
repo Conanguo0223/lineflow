@@ -12,6 +12,7 @@ from lineflow.examples import (
     WorkerAssignment,
     ComplexLine,
     WaitingTime,
+    WaterLine,
 )
 from sb3_contrib import (
     RecurrentPPO,
@@ -73,7 +74,12 @@ def _make_line(name, n_cells, info, simulation_step_size=1, curriculum=False):
             t_jump_max=2000, 
             scrap_factor=1,
         )
-
+    if name == 'water_line':
+        return WaterLine(
+            info=info,
+            # use_graph_as_states=False,
+            # scrap_factor=0 if curriculum else 1/n_cells,
+        )
     raise ValueError('Unkown simulation')
 
 

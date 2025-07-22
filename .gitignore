@@ -57,6 +57,7 @@ data
             
 # logging
 wandb/*
+logs
 scripts/wandb/*
 tb/*
 *nohup.out

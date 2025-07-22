@@ -42,7 +42,7 @@ class Buffer(Connector):
 
     """
 
-    def __init__(self, name, capacity=2, transition_time=10, put_time=1, get_time=1, put_std=None):
+    def __init__(self, name, capacity=2, transition_time=10, put_time=1, get_time=1, min_transition_time = 0, controllable_transition_time = False, put_std=None):
         super().__init__()
         self.name = name
         self.transition_time_between_slots = transition_time / (capacity - 1)
@@ -54,7 +54,8 @@ class Buffer(Connector):
         # Small registry of carriers
         self.carriers = {}
         self.capacity = capacity
-
+        self.controllable_transition_time = controllable_transition_time
+        self.min_transition_time = min_transition_time
         if put_std is None:
             self.put_std = 0.1*self.put_time
         else:
@@ -68,10 +69,12 @@ class Buffer(Connector):
         self.state = ObjectStates(
             DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
             NumericState(name='fill', vmin=0, vmax=1, is_observable=True, is_actionable=False),
+            NumericState(name='transition_time', vmin=self.min_transition_time, is_observable=True, is_actionable=self.controllable_transition_time),
         )
 
         self.state['on'].update(True)
         self.state['fill'].update(0)
+        self.state['transition_time'].update(self.transition_time)
 
     @property
     def n_carriers(self):

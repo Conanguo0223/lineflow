@@ -593,7 +593,8 @@ class Process(Station):
         processing_std=None,
         rework_probability=0,
         worker_pool=None,
-
+        min_processing_time = 0,
+        actionable_processing_time=False,
     ):
 
         super().__init__(
@@ -605,6 +606,8 @@ class Process(Station):
             worker_pool=worker_pool,
         )
 
+        self.min_processing_time = min_processing_time
+        self.actionable_processing_time = actionable_processing_time
         if buffer_in is not None:
             self._connect_to_input(buffer_in)
 
@@ -617,7 +620,7 @@ class Process(Station):
             DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
             DiscreteState('mode', categories=['working', 'waiting', 'failing']),
             TokenState(name='carrier', is_observable=False),
-            NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),
+            NumericState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, vmin=self.min_processing_time),
             CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
             # Time-based throughput metrics
             NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
