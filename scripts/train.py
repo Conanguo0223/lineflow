@@ -30,7 +30,7 @@ from stable_baselines3 import (
 from wandb.integration.sb3 import WandbCallback
 
 
-def _make_line(name, n_cells, info, simulation_step_size=1, curriculum=False):
+def _make_line(name, n_cells, info, simulation_step_size=10, curriculum=False):
 
     if name == 'part_distribution':
         return MultiProcess(
@@ -77,6 +77,8 @@ def _make_line(name, n_cells, info, simulation_step_size=1, curriculum=False):
     if name == 'water_line':
         return WaterLine(
             info=info,
+            step_size=simulation_step_size,
+            scrap_factor=1
             # use_graph_as_states=False,
             # scrap_factor=0 if curriculum else 1/n_cells,
         )

@@ -60,8 +60,13 @@ class WorkerPool(StationaryObject):
         self.state = ObjectStates(
             *[
                 worker.state for worker in self.workers.values()
-            ]
+            ],CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
+            NumericState('transition_time', is_actionable=False, is_observable=True, vmin=0),
+            CountState('n_stations', is_actionable=False, is_observable=True, vmin=0),
         )
+        self.state['transition_time'].update(self.transition_time)
+        self.state['n_workers'].update(self.n_workers)
+        self.state['n_stations'].update(self.n_stations)
         # Distribute worker on stations in round robin fashion
         for worker, station in zip_cycle(self.n_workers, self.n_stations):
             self.state[f"W{worker}"].apply(station)
@@ -658,7 +663,7 @@ class Process(Station):
                     rework_probability=self.rework_probability,
                 )
                 ## just testing
-                processing_time = int(processing_time)
+                processing_time = int(min(99, processing_time))
                 yield self.env.timeout(processing_time)
                 self.state['processing_time'].update(processing_time)
 

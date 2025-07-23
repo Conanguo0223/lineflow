@@ -162,17 +162,38 @@ class Line:
                     # first connect to the stations, then get the stations status for the observation
                     # workerpool features
                     # [n_workers, station_performance * n_stations]
-                    features = [len(self._objects[obj_name]._worker_names)]
+                    features = [self._objects[obj_name].n_workers, self._objects[obj_name].n_stations, self._objects[obj_name].transition_time]
+                    throughput_rates = []
                     connected_stations = self._objects[obj_name]._station_names
-                    for station_name in connected_stations:
+                    current_worker_status = self._objects[obj_name].state.values[:self._objects[obj_name].n_workers]
+                    _, occurences = np.unique(current_worker_status, return_counts=True)
+                    for i,station_name in enumerate(connected_stations):
+                        # features from the workerpool
+                        features_from_pool = [occurences[i]]  # number of workers assigned to this station
+                        features_from_pool = np.array(features_from_pool, dtype=np.float32)
+                        # features from the assembly station TODO: check if necessary
+                        features_to_get_from_assembly = ['throughput_rate', 'processing_time', 'n_workers']
+                        features_from_assembly = [self._objects[station_name].state[j].value for j in features_to_get_from_assembly]
+                        features_from_assembly = np.array(features_from_assembly, dtype=np.float32)
+                        # get the throughput rate to calculate the mean throughput rate of connected stations
+                        throughput_rates.append(self._objects[station_name].state['throughput_rate'].value)
+
                         # for each connected station, create an edge, and save the feature
                         edges.append({
                             'source': obj_name,
                             'target': station_name,
-                            'type': 'assigned_to'
+                            'type': 'assigned_to',
+                            'attributes': np.array(features_from_pool, dtype=np.float32)
                         })
-                        features.append(self._objects[station_name].state['throughput_rate'].value)
-                    # WorkerPool is a special case, we want to treat it as a nod
+                        edges.append({
+                            'source': station_name,
+                            'target': obj_name,
+                            'type': 'assigned_from',
+                            'attributes': np.array(features_from_assembly, dtype=np.float32)
+                        })
+                    # Append the mean throughput rate to the features
+                    features.append(np.mean(throughput_rates))
+
                     node_info = {
                         'name': obj_name,
                         'type': type(obj).__name__,
@@ -188,70 +209,9 @@ class Line:
                         'type': type(obj).__name__,
                         'feature': features
                     }
-                    
-                    node_info['node_properties'] = self._extract_component_properties(obj)
 
                 nodes[obj_name] = node_info
         return nodes, edges
-
-
-    def _extract_component_properties(self, component):
-        """Extract component-specific properties"""
-        properties = {}
-        
-        # Check component type and extract relevant properties
-        component_type = type(component).__name__
-        # type_lookup = {
-        #     'Assembly': 1,
-        #     'Process': 2,
-        #     'Source': 3,
-        #     'Sink': 4,
-        #     'Switch': 5,
-        #     'Magazine': 6,
-        # }
-        # properties['type_id'] = type_lookup.get(component_type, 0)
-
-        if component_type == 'Assembly':
-            properties.update({
-                'NOK_part_error_time': getattr(component, 'NOK_part_error_time', None)
-            })
-        elif component_type == 'Process':
-            properties.update({
-                'rework_probability': getattr(component, 'rework_probability', None),
-                # 'worker_pool': getattr(component, 'worker_pool', None) # TODO: manage the connection of worker pools
-            })
-        elif component_type == 'Source':
-            properties.update({
-                'unlimited_carriers': getattr(component, 'unlimited_carriers', False),
-                'carrier_capacity': getattr(component, 'carrier_capacity', None),
-                'processing_time': getattr(component, 'processing_time', None)
-            })
-        elif component_type == 'Sink':
-            properties.update({
-                'scrap_factor': getattr(component, 'scrap_factor', None),
-                'processing_time': getattr(component, 'processing_time', None)
-            })
-        elif component_type == 'Switch':
-            properties.update({
-                'scrap_factor': getattr(component, 'scrap_factor', None),
-                'processing_time': getattr(component, 'processing_time', None)
-            })
-        elif component_type == 'Magazine':
-            properties.update({
-                'is_assembly': True,
-                'NOK_part_error_time': getattr(component, 'NOK_part_error_time', None)
-            })
-        
-        # Check for actionable properties
-        if hasattr(component, 'state') and component.state is not None:
-            actionable_states = []
-            for state_name, state in component.state.states.items():
-                if state.is_actionable:
-                    actionable_states.append(state_name)
-            properties['actionable_states'] = actionable_states
-            properties['controllable'] = len(actionable_states) > 0
-        
-        return properties
     
     def build_graph_state(self, nodes, edges):
         """
@@ -298,7 +258,7 @@ class Line:
             target_idx = node_mapping[target_name][1]
             edge_types[edge_type].append([source_idx, target_idx])
             edge_attrs[edge_type].append(edge_data.get('attributes', []))
-            edge_mapping[edge_type].append(edge_data.get('buffer', {}))
+            # edge_mapping[edge_type].append(edge_data.get('buffer', {}))
 
         # Add self-loop edges for each node type
         for node_type, node_list in node_types.items():
@@ -306,14 +266,14 @@ class Line:
             if edge_type not in edge_types:
                 edge_types[edge_type] = []
                 edge_attrs[edge_type] = []
-                edge_mapping[edge_type] = []
+                # edge_mapping[edge_type] = []
             for i, (node_name, node_data) in enumerate(node_list):
                 edge_types[edge_type].append([i, i])
                 # For self-loop, you can use a default attribute or the node's own feature
                 # Here, we use zeros as default self-loop attributes
                 attr = np.zeros_like(node_data)
                 edge_attrs[edge_type].append(attr)
-                edge_mapping[edge_type].append(f"self_loop_{node_name}")
+                # edge_mapping[edge_type].append(f"self_loop_{node_name}")
 
         # Add edges and edge attributes to HeteroData
         for edge_type, edge_list in edge_types.items():
@@ -493,9 +453,11 @@ class Line:
             if type(obj).__name__ == 'WorkerPool':
                 # special case for WorkerPool, need to update the connected stations performance
                 connected_stations = obj._station_names
-                features = [len(obj._worker_names)]
+                features = [obj.n_workers, obj.n_stations, obj.transition_time]
+                throughput_rates = []
                 for station_name in connected_stations:
-                    features.append(self._objects[station_name].state['throughput_rate'].value)
+                    throughput_rates.append(self._objects[station_name].state['throughput_rate'].value)
+                features.append(np.mean(throughput_rates))
                 features = np.array(features, dtype=np.float32)
                 new_feature = torch.tensor(features, dtype=torch.float)
                 self._graph_states[node_type].x[node_idx] = new_feature
@@ -513,8 +475,34 @@ class Line:
             target_type = edge_type[2]
             
             edge_index = self._graph_states[edge_type].edge_index
-            if source_type == target_type or source_type == 'WorkerPool' or target_type == 'WorkerPool':
+            if source_type == target_type:
                 # self-loop edges
+                continue
+            if target_type == 'WorkerPool' and source_type == 'Assembly':
+                for i in range(edge_index.shape[1]):
+                    src_idx = edge_index[0, i].item()
+                    src_name = self.node_types[source_type][src_idx][0]
+                    # features from the assembly station TODO: check if necessary
+                    features_to_get_from_assembly = ['throughput_rate', 'processing_time', 'n_workers']
+                    features_from_assembly = [self._objects[src_name].state[j].value for j in features_to_get_from_assembly]
+                    features_from_assembly = np.array(features_from_assembly, dtype=np.float32)
+                    self._graph_states[edge_type].edge_attr[i] = torch.tensor(features_from_assembly, dtype=torch.float)
+                continue
+            elif source_type == 'WorkerPool' and target_type == 'Assembly':
+                for i in range(edge_index.shape[1]):
+                    src_idx = edge_index[0, i].item()
+                    src_name = self.node_types[source_type][src_idx][0]
+                    current_worker_status = self._objects[src_name].state.values[:self._objects[src_name].n_workers]
+                    # Count occurrences for all possible numbers (e.g., 0 to n_stations-1)
+                    possible_numbers = np.arange(self._objects[src_name].n_stations)
+                    occurences = np.array([(current_worker_status == n).sum() for n in possible_numbers])
+                    for i in range(edge_index.shape[1]):
+                        src_idx = edge_index[0, i].item()
+                        src_name = self.node_types[source_type][src_idx][0]
+                        # features from the assembly station TODO: check if necessary
+                        features_from_pool = [occurences[i]]  # number of workers assigned to this station
+                        features_from_pool = np.array(features_from_pool, dtype=np.float32)
+                        self._graph_states[edge_type].edge_attr[i] = torch.tensor(features_from_pool, dtype=torch.float)
                 continue
             # edge_index shape: [2, num_edges], so iterate over columns
             for i in range(edge_index.shape[1]):

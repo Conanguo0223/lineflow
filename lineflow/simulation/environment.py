@@ -194,7 +194,7 @@ class LineSimulation(gym.Env):
             observation = state
         else:
             observation = self._get_observations_as_tensor(state)
-
+        # TODO: add work in process to the reward as penalty
         if self.reward == "parts":
             reward = (self.line.get_n_parts_produced() - self.n_parts) - \
                 self.line.scrap_factor*(self.line.get_n_scrap_parts() - self.n_scrap_parts)

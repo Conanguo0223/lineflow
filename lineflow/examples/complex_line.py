@@ -238,84 +238,84 @@ class ComplexLine(Line):
 
 
 if __name__ == '__main__':
-    # waiting_times = [0, 1, 2, 5, 10, 20, 50]
-    # n_assemblies_list = [4, 6, 8, 10]
-    # for i in waiting_times:
-    #     for j in n_assemblies_list:
-    #         print(f'waiting_time: {i}, n_assemblies: {j}')
-    #         ramp_up_waiting_time = 10
-    #         waiting_time = i
-    #         n_assemblies = j
-    #         n_workers = 3*n_assemblies
-    #         scrap_factor = 1/n_assemblies
+    waiting_times = [0, 1, 2, 5, 10, 20, 50]
+    n_assemblies_list = [4, 6, 8, 10]
+    for i in waiting_times:
+        for j in n_assemblies_list:
+            print(f'waiting_time: {i}, n_assemblies: {j}')
+            ramp_up_waiting_time = 10
+            waiting_time = i
+            n_assemblies = j
+            n_workers = 3*n_assemblies
+            scrap_factor = 1/n_assemblies
 
-    #         line = ComplexLine(
-    #             realtime=False,
-    #             factor=0.05,
-    #             alternate=False,
-    #             n_assemblies=n_assemblies,
-    #             n_workers=n_workers,
-    #             step_size=1,
-    #             scrap_factor=scrap_factor,
-    #             random_state=0,
-    #             assembly_condition=30,
-    #             use_graph_as_states=True # test graph
-    #         )
+            line = ComplexLine(
+                realtime=False,
+                factor=0.05,
+                alternate=False,
+                n_assemblies=n_assemblies,
+                n_workers=n_workers,
+                step_size=1,
+                scrap_factor=scrap_factor,
+                random_state=0,
+                assembly_condition=30,
+                use_graph_as_states=True # test graph
+            )
 
-    #         agent = make_agent(
-    #             state=line.state,
-    #             ramp_up_waiting_time=ramp_up_waiting_time,
-    #             waiting_time=waiting_time,
-    #             n_assemblies=n_assemblies,
-    #             n_workers=n_workers,
-    #             get_max_reward=False
-    #             )
+            agent = make_agent(
+                state=line.state,
+                ramp_up_waiting_time=ramp_up_waiting_time,
+                waiting_time=waiting_time,
+                n_assemblies=n_assemblies,
+                n_workers=n_workers,
+                get_max_reward=False
+                )
 
-    #         # line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False)
-    #         collected_data = line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False,
-    #                 collect_data=True # test graph
-    #                 )
-    #         print("Produced: ", line.get_n_parts_produced())
-    #         print("Scrap: ", line.get_n_scrap_parts())
-    #         print("Reward: ",  line.get_n_parts_produced() - line.get_n_scrap_parts()*scrap_factor)
-    #         save_string = 'complex_line_graph_n_assemblies' + str(n_assemblies) + '_waiting_time' + str(waiting_time) + '.pt' # test graph
-    #         data_dict = {'graph': collected_data, 'waiting_time': waiting_time, 'n_assemblies': n_assemblies, 'Produced': line.get_n_parts_produced(), 'Scrap': line.get_n_scrap_parts(), 'Reward': line.get_n_parts_produced() - line.get_n_scrap_parts()*scrap_factor}
-    #         torch.save(data_dict, save_string) # test graph
+            # line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False)
+            collected_data = line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False,
+                    collect_data=True # test graph
+                    )
+            print("Produced: ", line.get_n_parts_produced())
+            print("Scrap: ", line.get_n_scrap_parts())
+            print("Reward: ",  line.get_n_parts_produced() - line.get_n_scrap_parts()*scrap_factor)
+            save_string = 'data/complex_line_graph_n_assemblies' + str(n_assemblies) + '_waiting_time' + str(waiting_time) + '.pt' # test graph
+            data_dict = {'graph': collected_data, 'waiting_time': waiting_time, 'n_assemblies': n_assemblies, 'Produced': line.get_n_parts_produced(), 'Scrap': line.get_n_scrap_parts(), 'Reward': line.get_n_parts_produced() - line.get_n_scrap_parts()*scrap_factor}
+            torch.save(data_dict, save_string) # test graph
             
-    ramp_up_waiting_time = 10
-    waiting_time = 2
-    n_assemblies = 6
-    n_workers = 3*n_assemblies
-    scrap_factor = 1/n_assemblies
+    # ramp_up_waiting_time = 10
+    # waiting_time = 2
+    # n_assemblies = 6
+    # n_workers = 3*n_assemblies
+    # scrap_factor = 1/n_assemblies
 
-    line = ComplexLine(
-        realtime=False,
-        factor=0.05,
-        alternate=False,
-        n_assemblies=n_assemblies,
-        n_workers=n_workers,
-        step_size=1,
-        scrap_factor=scrap_factor,
-        random_state=0,
-        assembly_condition=30,
-        use_graph_as_states=True # test graph
-    )
+    # line = ComplexLine(
+    #     realtime=False,
+    #     factor=0.05,
+    #     alternate=False,
+    #     n_assemblies=n_assemblies,
+    #     n_workers=n_workers,
+    #     step_size=1,
+    #     scrap_factor=scrap_factor,
+    #     random_state=0,
+    #     assembly_condition=30,
+    #     use_graph_as_states=True # test graph
+    # )
 
-    agent = make_agent(
-        state=line.state,
-        ramp_up_waiting_time=ramp_up_waiting_time,
-        waiting_time=waiting_time,
-        n_assemblies=n_assemblies,
-        n_workers=n_workers,
-        get_max_reward=False
-        )
+    # agent = make_agent(
+    #     state=line.state,
+    #     ramp_up_waiting_time=ramp_up_waiting_time,
+    #     waiting_time=waiting_time,
+    #     n_assemblies=n_assemblies,
+    #     n_workers=n_workers,
+    #     get_max_reward=False
+    #     )
 
-    # line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False)
-    collected_data = line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False,
-             collect_data=True # test graph
-             )
-    save_string = 'complex_line_graph_n_assemblies' + str(n_assemblies) + '_waiting_time' + str(waiting_time) + '.pt' # test graph
-    torch.save(collected_data, save_string) # test graph
-    print("Produced: ", line.get_n_parts_produced())
-    print("Scrap: ", line.get_n_scrap_parts())
-    print("Reward: ",  line.get_n_parts_produced() - line.get_n_scrap_parts()*scrap_factor)
+    # # line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False)
+    # collected_data = line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False,
+    #          collect_data=True # test graph
+    #          )
+    # save_string = 'complex_line_graph_n_assemblies' + str(n_assemblies) + '_waiting_time' + str(waiting_time) + '.pt' # test graph
+    # torch.save(collected_data, save_string) # test graph
+    # print("Produced: ", line.get_n_parts_produced())
+    # print("Scrap: ", line.get_n_scrap_parts())
+    # print("Reward: ",  line.get_n_parts_produced() - line.get_n_scrap_parts()*scrap_factor)
