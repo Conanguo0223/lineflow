@@ -172,11 +172,11 @@ class Line:
                         features_from_pool = [occurences[i]]  # number of workers assigned to this station
                         features_from_pool = np.array(features_from_pool, dtype=np.float32)
                         # features from the assembly station TODO: check if necessary
-                        features_to_get_from_assembly = ['throughput_rate', 'processing_time', 'n_workers']
+                        features_to_get_from_assembly = ['current_window_throughput', 'processing_time', 'n_workers']
                         features_from_assembly = [self._objects[station_name].state[j].value for j in features_to_get_from_assembly]
                         features_from_assembly = np.array(features_from_assembly, dtype=np.float32)
                         # get the throughput rate to calculate the mean throughput rate of connected stations
-                        throughput_rates.append(self._objects[station_name].state['throughput_rate'].value)
+                        throughput_rates.append(self._objects[station_name].state['current_window_throughput'].value)
 
                         # for each connected station, create an edge, and save the feature
                         edges.append({
@@ -456,7 +456,7 @@ class Line:
                 features = [obj.n_workers, obj.n_stations, obj.transition_time]
                 throughput_rates = []
                 for station_name in connected_stations:
-                    throughput_rates.append(self._objects[station_name].state['throughput_rate'].value)
+                    throughput_rates.append(self._objects[station_name].state['current_window_throughput'].value)
                 features.append(np.mean(throughput_rates))
                 features = np.array(features, dtype=np.float32)
                 new_feature = torch.tensor(features, dtype=torch.float)
@@ -483,7 +483,7 @@ class Line:
                     src_idx = edge_index[0, i].item()
                     src_name = self.node_types[source_type][src_idx][0]
                     # features from the assembly station TODO: check if necessary
-                    features_to_get_from_assembly = ['throughput_rate', 'processing_time', 'n_workers']
+                    features_to_get_from_assembly = ['current_window_throughput', 'processing_time', 'n_workers']
                     features_from_assembly = [self._objects[src_name].state[j].value for j in features_to_get_from_assembly]
                     features_from_assembly = np.array(features_from_assembly, dtype=np.float32)
                     self._graph_states[edge_type].edge_attr[i] = torch.tensor(features_from_assembly, dtype=torch.float)

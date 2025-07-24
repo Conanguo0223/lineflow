@@ -238,8 +238,10 @@ class ComplexLine(Line):
 
 
 if __name__ == '__main__':
-    waiting_times = [5, 10, 20, 50]
-    n_assemblies_list = [5, 6]
+    # waiting_times = [5, 10, 20, 50]
+    # n_assemblies_list = [5, 6]
+    waiting_times = [5]
+    n_assemblies_list = [5]
     for i in waiting_times:
         for j in n_assemblies_list:
             print(f'waiting_time: {i}, n_assemblies: {j}')
@@ -255,7 +257,7 @@ if __name__ == '__main__':
                 alternate=False,
                 n_assemblies=n_assemblies,
                 n_workers=n_workers,
-                step_size=5,
+                step_size=1,
                 scrap_factor=scrap_factor,
                 random_state=0,
                 assembly_condition=30,

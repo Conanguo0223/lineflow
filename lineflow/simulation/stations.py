@@ -333,7 +333,7 @@ class Station(StationaryObject):
         while True:
             if hasattr(self, 'state'):
                 self._update_throughput_metrics()
-            yield self.env.timeout(1)  # Update every simulation time unit
+            yield self.env.timeout(self.env.step_size)  # Update every simulation time unit
 
     def _derive_actions_from_new_state(self, state):
         # Turn machine back on if needed
@@ -784,7 +784,7 @@ class Source(Station):
                 name='carrier_spec', 
                 categories=list(self.carrier_specs.keys()), 
                 is_actionable=False,
-                is_observable=True,
+                is_observable=False,
             ),
             # Time-based throughput metrics
             NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
@@ -1416,7 +1416,7 @@ observation:['mode','carriers_in_magazine']
 actions: ['carriers_in_magazine']
 
 WorkerPool:
-observation:['throughput']*n_stations # should it be the performance of each of the machines
+observation:['average throughput of connected stations']
 actions: ['index_station']*n_workers
 
 '''

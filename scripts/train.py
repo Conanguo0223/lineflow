@@ -30,7 +30,7 @@ from stable_baselines3 import (
 from wandb.integration.sb3 import WandbCallback
 
 
-def _make_line(name, n_cells, info, simulation_step_size=10, curriculum=False):
+def _make_line(name, n_cells, info, simulation_step_size=1, curriculum=False):
 
     if name == 'part_distribution':
         return MultiProcess(
