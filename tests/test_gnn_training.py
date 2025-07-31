@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torch_geometric.nn import HeteroConv, GCNConv
 from torch_geometric.data import HeteroData
 from torch.nn import Linear
-from torch_geometric.nn import HeteroConv, SAGEConv,TransformerConv, HGTConv
+from torch_geometric.nn import HeteroConv, SAGEConv,TransformerConv, HGTConv, HANConv
 
 
 class GraphStatePredictor(torch.nn.Module):
@@ -21,7 +21,7 @@ class GraphStatePredictor(torch.nn.Module):
         # HGT layers for processing individual graphs
         self.graph_convs = torch.nn.ModuleList()
         for _ in range(num_layers):
-            conv = HGTConv(hidden_channels, hidden_channels, data.metadata(), num_heads)
+            conv = HANConv(hidden_channels, hidden_channels, data.metadata(), num_heads)
             self.graph_convs.append(conv)
         
         # Temporal transformer to process sequence of graph states
@@ -197,13 +197,14 @@ for epoch in range(num_epochs):
         num_batches += 1
         
         # Break if we have enough training samples
-        if num_batches >= 20:  # Limit training samples per epoch
+        if num_batches >= 70:  # Limit training samples per epoch
             break
     
     avg_loss = epoch_loss / num_batches if num_batches > 0 else 0
     
     if epoch % 2 == 0:
         print(f"Epoch {epoch}/{num_epochs}, Average Loss: {avg_loss:.4f}, Max Loss: {max_loss:.4f}")
+    
         # print(f"index used: {index}, results of this index: {dataset['Reward']}")
-
+torch.save(temporal_model.state_dict(), 'temporal_model.pth')
 print("Training completed!")

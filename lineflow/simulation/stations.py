@@ -152,11 +152,9 @@ class Station(StationaryObject):
 
         self.worker_assignments = {}
         # Time-based throughput tracking
-        self.throughput_window = 100  # Time window for throughput calculation
-        self.throughput_history = []  # List of (timestamp, carrier_count, part_count)
-        self.current_window_carriers = 0
-        self.current_window_parts = 0
-        self.window_start_time = 0
+        self.throughput_window_size = 100  # Time window size for moving average
+        self.throughput_events = []  # List of (timestamp, carrier_count, part_count)
+        self.moving_window_lookback = 5  # Number of window periods to average
 
     @property
     def is_automatic(self):
@@ -333,7 +331,7 @@ class Station(StationaryObject):
         while True:
             if hasattr(self, 'state'):
                 self._update_throughput_metrics()
-            yield self.env.timeout(self.env.step_size)  # Update every simulation time unit
+            yield self.env.timeout(1)  # Update every simulation time unit
 
     def _derive_actions_from_new_state(self, state):
         # Turn machine back on if needed
@@ -345,68 +343,137 @@ class Station(StationaryObject):
         self.state.apply(actions)
     
     def _record_throughput_time_based(self, carrier):
-        """Record throughput with time-based windowing"""
+        """Record object passing through the station"""
         current_time = self.env.now
         
-        # Initialize window if first record
-        if self.window_start_time == 0:
-            self.window_start_time = current_time
-        
-        # Check if we need to start a new time window
-        if current_time >= self.window_start_time + self.throughput_window:
-            # Store the completed window
-            self.throughput_history.append({
-                'window_start': self.window_start_time,
-                'window_end': self.window_start_time + self.throughput_window,
-                'carriers_processed': self.current_window_carriers,
-                'parts_processed': self.current_window_parts,
-                'throughput_rate': self.current_window_carriers / self.throughput_window,
-                'parts_rate': self.current_window_parts / self.throughput_window
-            })
-            
-            # Start new window
-            self.window_start_time = current_time
-            self.current_window_carriers = 0
-            self.current_window_parts = 0
-            
-        # Record current event
-        self.current_window_carriers += 1
+        # Count parts on carrier
+        part_count = 1
         if hasattr(carrier, 'parts'):
-            self.current_window_parts += len(carrier.parts)
-        else:
-            self.current_window_parts += 1
+            part_count = len(carrier.parts)
         
+        # Add event to history
+        self.throughput_events.append({
+            'timestamp': current_time,
+            'carriers': 1,
+            'parts': part_count
+        })
+        
+        # Keep only events within reasonable history (e.g., last 10 windows)
+        cutoff_time = current_time - (self.throughput_window_size * 10)
+        self.throughput_events = [
+            event for event in self.throughput_events 
+            if event['timestamp'] > cutoff_time
+        ]
+    
+    def _get_moving_window_throughput(self, window_end_time=None):
+        """Calculate throughput for a moving window ending at specified time"""
+        if window_end_time is None:
+            window_end_time = self.env.now
+        
+        window_start_time = window_end_time - self.throughput_window_size
+        
+        # Find events within the window
+        window_events = [
+            event for event in self.throughput_events
+            if window_start_time <= event['timestamp'] <= window_end_time
+        ]
+        
+        # Calculate totals
+        total_carriers = sum(event['carriers'] for event in window_events)
+        total_parts = sum(event['parts'] for event in window_events)
+        
+        # Calculate rates (per time unit)
+        carrier_rate = total_carriers / self.throughput_window_size
+        parts_rate = total_parts / self.throughput_window_size
+        
+        return {
+            'carriers_in_window': total_carriers,
+            'parts_in_window': total_parts,
+            'carrier_rate': carrier_rate,
+            'parts_rate': parts_rate,
+            'window_start': window_start_time,
+            'window_end': window_end_time
+        }
+
+    def _get_moving_average_throughput(self, num_windows=None):
+        """Calculate moving average over multiple window periods"""
+        if num_windows is None:
+            num_windows = self.moving_window_lookback
+        
+        current_time = self.env.now
+        window_rates = []
+        
+        # Calculate throughput for each of the last N windows
+        for i in range(num_windows):
+            window_end = current_time - (i * self.throughput_window_size)
+            if window_end >= self.throughput_window_size:  # Ensure we have a full window
+                window_data = self._get_moving_window_throughput(window_end)
+                window_rates.append(window_data['carrier_rate'])
+        
+        # Return average rate
+        if window_rates:
+            return sum(window_rates) / len(window_rates)
+        else:
+            return 0.0
+
+    def _update_throughput_metrics(self):
+        """Update moving window throughput metrics"""
+        if not hasattr(self, 'state'):
+            return
+        
+        # Get current moving window data
+        current_window = self._get_moving_window_throughput()
+        
+        # Update current window throughput count
+        if 'current_window_throughput' in self.state.names:
+            self.state['current_window_throughput'].update(current_window['carriers_in_window'])
+        
+        # Update current throughput rate
+        if 'throughput_rate' in self.state.names:
+            self.state['throughput_rate'].update(current_window['carrier_rate'])
+        
+        # Update moving average throughput
+        if 'avg_throughput_last_5_windows' in self.state.names:
+            avg_rate = self._get_moving_average_throughput(5)
+            self.state['avg_throughput_last_5_windows'].update(avg_rate)
+
     def get_throughput_for_period(self, start_time, end_time):
         """Get throughput data for a specific time period"""
-        relevant_windows = []
-        for window in self.throughput_history:
-            if (window['window_start'] < end_time and window['window_end'] > start_time):
-                relevant_windows.append(window)
-        return relevant_windows
+        period_events = [
+            event for event in self.throughput_events
+            if start_time <= event['timestamp'] <= end_time
+        ]
+        
+        total_carriers = sum(event['carriers'] for event in period_events)
+        total_parts = sum(event['parts'] for event in period_events)
+        duration = end_time - start_time
+        
+        return {
+            'total_carriers': total_carriers,
+            'total_parts': total_parts,
+            'carrier_rate': total_carriers / duration if duration > 0 else 0,
+            'parts_rate': total_parts / duration if duration > 0 else 0,
+            'start_time': start_time,
+            'end_time': end_time,
+            'duration': duration
+        }
+
+    def get_recent_throughput_windows(self, num_windows=5):
+        """Get throughput data for the last N moving windows"""
+        current_time = self.env.now
+        windows = []
+        
+        for i in range(num_windows):
+            window_end = current_time - (i * self.throughput_window_size)
+            if window_end >= self.throughput_window_size:
+                window_data = self._get_moving_window_throughput(window_end)
+                windows.append(window_data)
+        
+        return list(reversed(windows))  # Return in chronological order
     
     def get_recent_throughput(self, time_periods=5):
         """Get throughput for the last N time periods"""
         return self.throughput_history[-time_periods:] if len(self.throughput_history) >= time_periods else self.throughput_history
-
-    def _update_throughput_metrics(self):
-        """Update rolling throughput metrics"""
-        # Update current window throughput immediately
-        if hasattr(self, 'state') and 'current_window_throughput' in self.state.names:
-            self.state['current_window_throughput'].update(self.current_window_carriers)
-        
-        # Calculate current rate based on elapsed time in current window
-        current_time = self.env.now
-        if current_time > self.window_start_time:
-            elapsed_time = current_time - self.window_start_time
-            current_rate = self.current_window_carriers / elapsed_time
-            if hasattr(self, 'state') and 'throughput_rate' in self.state.names:
-                self.state['throughput_rate'].update(current_rate)
-        
-        # Update rolling averages from completed windows
-        recent_windows = self.get_recent_throughput(5)
-        if recent_windows and hasattr(self, 'state') and 'avg_throughput_last_5_windows' in self.state.names:
-            avg_rate = sum(w['throughput_rate'] for w in recent_windows) / len(recent_windows)
-            self.state['avg_throughput_last_5_windows'].update(avg_rate)
 
 class Assembly(Station):
     """

@@ -23,6 +23,7 @@ from torch_geometric.nn import (
     SAGEConv,
     TransformerConv,
     HGTConv,
+    HANConv,
 )
 from torch.nn import Linear
 
@@ -116,7 +117,7 @@ class ImprovedHGT(torch.nn.Module):
         self.convs = torch.nn.ModuleList()
         self.norms = torch.nn.ModuleList()
         for _ in range(config.num_layers):
-            conv = HGTConv(
+            conv = HANConv(
                 config.hidden_channels, 
                 config.hidden_channels, 
                 metadata,
@@ -310,15 +311,15 @@ class PPOTrainer:
         torch.backends.cudnn.deterministic = self.config.torch_deterministic
         n_cells = 5
         # Create environment
-        # line = ComplexLine(
-        #     alternate=False,
-        #     n_assemblies=n_cells,
-        #     n_workers=3*n_cells,
-        #     scrap_factor=1/n_cells,
-        #     step_size=10,
-        #     info=[],
-        #     use_graph_as_states=True,
-            # )
+        line = ComplexLine(
+            alternate=False,
+            n_assemblies=n_cells,
+            n_workers=3*n_cells,
+            scrap_factor=1/n_cells,
+            step_size=10,
+            info=[],
+            use_graph_as_states=True,
+            )
         # line = MultiProcess(
         #     alternate=False,
         #     n_processes=n_cells,
@@ -326,7 +327,7 @@ class PPOTrainer:
         #     info=[('SwitchD', 'index_buffer_out')],
         #     use_graph_as_states=True,
         # )
-        line = WaitingTime(use_graph_as_states=True, step_size=10)
+        # line = WaitingTime(use_graph_as_states=True, step_size=10)
         self.envs = make_stacked_vec_env(
             line=line,
             simulation_end=4000,

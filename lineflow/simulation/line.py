@@ -244,6 +244,7 @@ class Line:
         edge_types = {}
         edge_attrs = {}
         edge_mapping = {}
+        add_reverse_edges = True  # Add reverse edges for directed edges
         for edge_data in edges:
             source_name = edge_data['source']
             target_name = edge_data['target']
@@ -258,22 +259,46 @@ class Line:
             target_idx = node_mapping[target_name][1]
             edge_types[edge_type].append([source_idx, target_idx])
             edge_attrs[edge_type].append(edge_data.get('attributes', []))
+            if add_reverse_edges and source_type != 'WorkerPool' and target_type != 'WorkerPool':
+                reverse_edge_type = (target_type, 'reverse', source_type)
+                if reverse_edge_type not in edge_types:
+                    edge_types[reverse_edge_type] = []
+                    edge_attrs[reverse_edge_type] = []
+                    edge_mapping[reverse_edge_type] = []
+                edge_types[reverse_edge_type].append([target_idx, source_idx])
+                edge_attrs[reverse_edge_type].append(edge_data.get('attributes', []))
             # edge_mapping[edge_type].append(edge_data.get('buffer', {}))
 
         # Add self-loop edges for each node type
-        for node_type, node_list in node_types.items():
-            edge_type = (node_type, 'self_loop', node_type)
+        # for node_type, node_list in node_types.items():
+        #     edge_type = (node_type, 'self_loop', node_type)
+        #     if edge_type not in edge_types:
+        #         edge_types[edge_type] = []
+        #         edge_attrs[edge_type] = []
+        #         # edge_mapping[edge_type] = []
+        #     for i, (node_name, node_data) in enumerate(node_list):
+        #         edge_types[edge_type].append([i, i])
+        #         # For self-loop, you can use a default attribute or the node's own feature
+        #         # Here, we use zeros as default self-loop attributes
+        #         attr = np.zeros_like(node_data)
+        #         edge_attrs[edge_type].append(attr)
+        #         # edge_mapping[edge_type].append(f"self_loop_{node_name}")
+        
+        # Add self-loop to only the source nodes
+        for node_list in node_types['Source']:
+            node_name, node_data = node_list
+            edge_type = ('Source', 'self_loop', 'Source')
             if edge_type not in edge_types:
                 edge_types[edge_type] = []
                 edge_attrs[edge_type] = []
                 # edge_mapping[edge_type] = []
-            for i, (node_name, node_data) in enumerate(node_list):
-                edge_types[edge_type].append([i, i])
-                # For self-loop, you can use a default attribute or the node's own feature
-                # Here, we use zeros as default self-loop attributes
-                attr = np.zeros_like(node_data)
-                edge_attrs[edge_type].append(attr)
-                # edge_mapping[edge_type].append(f"self_loop_{node_name}")
+            source_idx = node_mapping[node_name][1]
+            edge_types[edge_type].append([source_idx, source_idx])
+            # For self-loop, you can use a default attribute or the node's own feature
+            # Here, we use zeros as default self-loop attributes
+            attr = np.zeros_like(node_data)
+            edge_attrs[edge_type].append(attr)
+            # edge_mapping[edge_type].append(f"self_loop_{node_name}")
 
         # Add edges and edge attributes to HeteroData
         for edge_type, edge_list in edge_types.items():
@@ -472,6 +497,7 @@ class Line:
         # update edge attributes if any
         for edge_type in self._graph_states.edge_types:
             source_type = edge_type[0]
+            link_type = edge_type[1]
             target_type = edge_type[2]
             
             edge_index = self._graph_states[edge_type].edge_index
@@ -504,6 +530,7 @@ class Line:
                         features_from_pool = np.array(features_from_pool, dtype=np.float32)
                         self._graph_states[edge_type].edge_attr[i] = torch.tensor(features_from_pool, dtype=torch.float)
                 continue
+
             # edge_index shape: [2, num_edges], so iterate over columns
             for i in range(edge_index.shape[1]):
                 src_idx = edge_index[0, i].item()
@@ -519,6 +546,8 @@ class Line:
                     continue
                 
                 edge_name = f"Buffer_{src_name}_to_{tgt_name}"
+                if link_type == 'reverse':
+                    edge_name = f"Buffer_{tgt_name}_to_{src_name}"
                 self._graph_states[edge_type].edge_attr[i] = torch.tensor(self._objects[edge_name].state.values, dtype=torch.float)
                 
     def step_event(self):
