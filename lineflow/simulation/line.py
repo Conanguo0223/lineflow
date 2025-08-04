@@ -153,7 +153,7 @@ class Line:
                         'source': source_node,
                         'target': target_node,
                         'buffer': obj_name,
-                        'type': 'connects_to',
+                        'type': 'downstream',
                         'attributes': self._objects[obj_name].state.values
                     })
             else:
@@ -260,7 +260,7 @@ class Line:
             edge_types[edge_type].append([source_idx, target_idx])
             edge_attrs[edge_type].append(edge_data.get('attributes', []))
             if add_reverse_edges and source_type != 'WorkerPool' and target_type != 'WorkerPool':
-                reverse_edge_type = (target_type, 'reverse', source_type)
+                reverse_edge_type = (target_type, 'upstream', source_type)
                 if reverse_edge_type not in edge_types:
                     edge_types[reverse_edge_type] = []
                     edge_attrs[reverse_edge_type] = []
@@ -546,7 +546,7 @@ class Line:
                     continue
                 
                 edge_name = f"Buffer_{src_name}_to_{tgt_name}"
-                if link_type == 'reverse':
+                if link_type == 'upstream':
                     edge_name = f"Buffer_{tgt_name}_to_{src_name}"
                 self._graph_states[edge_type].edge_attr[i] = torch.tensor(self._objects[edge_name].state.values, dtype=torch.float)
                 

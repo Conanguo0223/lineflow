@@ -152,7 +152,7 @@ class Station(StationaryObject):
 
         self.worker_assignments = {}
         # Time-based throughput tracking
-        self.throughput_window_size = 100  # Time window size for moving average
+        self.throughput_window_size = 10  # Time window size for moving average
         self.throughput_events = []  # List of (timestamp, carrier_count, part_count)
         self.moving_window_lookback = 5  # Number of window periods to average
 
@@ -436,6 +436,9 @@ class Station(StationaryObject):
         if 'avg_throughput_last_5_windows' in self.state.names:
             avg_rate = self._get_moving_average_throughput(5)
             self.state['avg_throughput_last_5_windows'].update(avg_rate)
+
+        if 'current_work_in_process' in self.state.names:
+            self.state['current_work_in_process'].update(current_window['parts_in_window'])
 
     def get_throughput_for_period(self, start_time, end_time):
         """Get throughput data for a specific time period"""

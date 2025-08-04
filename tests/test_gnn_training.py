@@ -159,6 +159,7 @@ for epoch in range(num_epochs):
     epoch_loss = 0.0
     num_batches = 0
     max_loss = 0.0
+    max_loss_timestep = -1
     # Create training sequences from all_data_sets
     for i in range(len(dataset['graph']) - sequence_length):
         # Sample from random index in the current dataset
@@ -188,7 +189,8 @@ for epoch in range(num_epochs):
             loss = criterion(predictions[node_type], target_dict[node_type])
             total_loss += loss
             max_loss = max(max_loss, loss.item())
-        
+            max_loss_timestep = random_index
+
         # Backward pass
         total_loss.backward()
         predictor_optimizer.step()
@@ -203,7 +205,7 @@ for epoch in range(num_epochs):
     avg_loss = epoch_loss / num_batches if num_batches > 0 else 0
     
     if epoch % 2 == 0:
-        print(f"Epoch {epoch}/{num_epochs}, Average Loss: {avg_loss:.4f}, Max Loss: {max_loss:.4f}")
+        print(f"Epoch {epoch}/{num_epochs}, Average Loss: {avg_loss:.4f}, Max Loss: {max_loss:.4f}, Max Loss Timestep: {max_loss_timestep}")
     
         # print(f"index used: {index}, results of this index: {dataset['Reward']}")
 torch.save(temporal_model.state_dict(), 'temporal_model.pth')
