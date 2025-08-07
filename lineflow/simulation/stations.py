@@ -573,6 +573,63 @@ class Assembly(Station):
                 return True
         return False
 
+    def _record_scrap_time_based(self):
+        """Record a scrap event with timestamp"""
+        current_time = self.env.now
+        self.scrap_events.append({'timestamp': current_time, 'scrap': 1})
+        # Keep only recent events
+        cutoff_time = current_time - (self.scrap_window_size * 10)
+        self.scrap_events = [
+            event for event in self.scrap_events
+            if event['timestamp'] > cutoff_time
+        ]
+
+    def _get_moving_window_scrap(self, window_end_time=None):
+        """Compute scrapped parts in a moving window ending at specified time"""
+        if window_end_time is None:
+            window_end_time = self.env.now
+        window_start_time = window_end_time - self.scrap_window_size
+        window_events = [
+            event for event in self.scrap_events
+            if window_start_time <= event['timestamp'] <= window_end_time
+        ]
+        total_scrap = sum(event['scrap'] for event in window_events)
+        scrap_rate = total_scrap / self.scrap_window_size
+        return {
+            'scrap_in_window': total_scrap,
+            'scrap_rate': scrap_rate,
+            'window_start': window_start_time,
+            'window_end': window_end_time
+        }
+
+    def _get_moving_average_scrap(self, num_windows=None):
+        """Compute moving average of scrapped parts over multiple windows"""
+        if num_windows is None:
+            num_windows = self.scrap_moving_window_lookback
+        current_time = self.env.now
+        window_rates = []
+        for i in range(num_windows):
+            window_end = current_time - (i * self.scrap_window_size)
+            if window_end >= self.scrap_window_size:
+                window_data = self._get_moving_window_scrap(window_end)
+                window_rates.append(window_data['scrap_rate'])
+        if window_rates:
+            return sum(window_rates) / len(window_rates)
+        else:
+            return 0.0
+
+    def _update_scrap_metrics(self):
+        """Update scrap metrics in state (if desired)"""
+        current_window = self._get_moving_window_scrap()
+        if 'scrap_in_window' in self.state.names:
+            self.state['scrap_in_window'].update(current_window['scrap_in_window'])
+        if 'scrap_rate' in self.state.names:
+            self.state['scrap_rate'].update(current_window['scrap_rate'])
+        if 'avg_scrap_last_5_windows' in self.state.names:
+            avg_rate = self._get_moving_average_scrap(5)
+            self.state['avg_scrap_last_5_windows'].update(avg_rate)
+
+
     def _draw_info(self, screen):
         self._draw_n_workers(screen)
 
@@ -602,7 +659,8 @@ class Assembly(Station):
                         yield self.env.process(self.set_to_error())
                         yield self.env.timeout(self.NOK_part_error_time)
                         self.state['n_scrap_parts'].increment()
-
+                        # record scrap event
+                        self._record_scrap_time_based()
                         # send carrier back
                         if hasattr(self, 'buffer_return'):
                             carrier_component.parts.clear()

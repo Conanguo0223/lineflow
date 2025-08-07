@@ -586,6 +586,9 @@ class Line:
         if len(self.env._queue) == 0:
             self._register_objects_at_env()
 
+        # # TEST data collection
+        # self.env.process(self.collect_station_info_process(interval=10))
+
         now = 0
         actions = None
         pbar = tqdm(
@@ -602,7 +605,7 @@ class Line:
             try:
                 # Step the simulation
                 state, terminated = self.step(simulation_end=simulation_end)
-                
+                print(state)
                 # Collect the current graph state (don't overwrite self._graph_states!)
                 if collect_data:
                     if self._graph_states is not None:
@@ -649,3 +652,19 @@ class Line:
 
     def __getitem__(self, name):
         return self._objects[name]
+
+    def collect_station_info_process(self, interval=10):
+        """
+        SimPy process that collects info from all stations every `interval` time units.
+        """
+        collected_info = []
+        while True:
+            # Collect info from all Station objects
+            info = {}
+            for name, obj in self._objects.items():
+                if isinstance(obj, Station):
+                    info[name] = obj.state.values  # or obj.state.df(), etc.
+            collected_info.append((self.env.now, info))
+            yield self.env.timeout(interval)
+        # Optionally, return collected_info at the end (if you want to access it later)
+        # return collected_info

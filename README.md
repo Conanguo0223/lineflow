@@ -18,6 +18,11 @@ pip install lineflow-rl
 
 # Examples
 
+## (added) Rate-wise observation
+
+## (added) Adjustable operating times
+
+## (added) Graph-based representation
 
 ## Visualization 
 This is how an assembly line can be implemented and visualized:
