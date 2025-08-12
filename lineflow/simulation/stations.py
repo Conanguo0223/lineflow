@@ -121,6 +121,7 @@ class Station(StationaryObject):
         processing_std=None,
         rework_probability=0,
         worker_pool=None,
+        use_rates=False,  # test out whether to use rates
     ):
 
         super().__init__()
@@ -133,7 +134,8 @@ class Station(StationaryObject):
 
         self.worker_pool = worker_pool
         self.worker_requests = {}
-
+        self.use_rates = use_rates
+        self.state_ = []
         if self.worker_pool is not None:
             self.worker_pool.register_station(self)
 
@@ -152,9 +154,10 @@ class Station(StationaryObject):
 
         self.worker_assignments = {}
         # Time-based throughput tracking
-        self.throughput_window_size = 10  # Time window size for moving average
+        self.time_based_window_size = 10  # Time window size for moving average
         self.throughput_events = []  # List of (timestamp, carrier_count, part_count)
         self.moving_window_lookback = 5  # Number of window periods to average
+        self.utilization_events = []  # List of utilization events
 
     @property
     def is_automatic(self):
@@ -164,6 +167,12 @@ class Station(StationaryObject):
     def n_workers(self):
         if self.worker_pool is not None:
             return len(self.worker_assignments) + 1
+        else:
+            return 1
+    @property
+    def n_workers_proportional(self):
+        if self.worker_pool is not None:
+            return len(self.worker_assignments) / self.worker_pool.n_workers
         else:
             return 1
 
@@ -341,7 +350,20 @@ class Station(StationaryObject):
     def apply(self, actions):
         self._derive_actions_from_new_state(actions)
         self.state.apply(actions)
-    
+
+    def _record_utilization_time_based(self, mode):
+        current_time = self.env.now
+        self.utilization_events.append({
+            'timestamp': current_time,
+            'mode': mode,
+        })
+        # Keep only events within reasonable  (e.g., last 10 windows)
+        cutoff_time = current_time - (self.time_based_window_size * 10)
+        self.utilization_events = [
+            event for event in self.utilization_events
+            if event['timestamp'] > cutoff_time
+        ]
+
     def _record_throughput_time_based(self, carrier):
         """Record object passing through the station"""
         current_time = self.env.now
@@ -351,26 +373,79 @@ class Station(StationaryObject):
         if hasattr(carrier, 'parts'):
             part_count = len(carrier.parts)
         
-        # Add event to history
+        # Add event to 
         self.throughput_events.append({
             'timestamp': current_time,
             'carriers': 1,
             'parts': part_count
         })
         
-        # Keep only events within reasonable history (e.g., last 10 windows)
-        cutoff_time = current_time - (self.throughput_window_size * 10)
+        # Keep only events within reasonable  (e.g., last 10 windows)
+        cutoff_time = current_time - (self.time_based_window_size * 10)
         self.throughput_events = [
             event for event in self.throughput_events 
             if event['timestamp'] > cutoff_time
         ]
-    
+
+    def _get_moving_window_utilization(self, window_end_time=None):
+        """Calculate utilization rate for a moving window"""
+        if window_end_time is None:
+            window_end_time = self.env.now
+        
+        window_start_time = window_end_time - self.time_based_window_size
+        
+        # Find events within the window
+        window_events = [
+            event for event in self.utilization_events
+            if window_start_time <= event['timestamp'] <= window_end_time
+        ]
+        
+        if not window_events:
+            return {'utilization_rate': 0.0}
+        
+        # Calculate time spent in each mode
+        mode_durations = {'working': 0.0, 'waiting': 0.0, 'failing': 0.0}
+        
+        # Add starting point if needed
+        if window_events[0]['timestamp'] > window_start_time:
+            # Assume 'waiting' mode before first event
+            prev_mode = 'waiting'
+            prev_time = window_start_time
+        else:
+            prev_mode = window_events[0]['mode']
+            prev_time = window_events[0]['timestamp']
+        
+        # Calculate durations
+        for event in window_events:
+            duration = event['timestamp'] - prev_time
+            if prev_mode in mode_durations:
+                mode_durations[prev_mode] += duration
+            prev_time = event['timestamp']
+            prev_mode = event['mode']
+        
+        # Add final duration to window end
+        final_duration = window_end_time - prev_time
+        if prev_mode in mode_durations:
+            mode_durations[prev_mode] += final_duration
+        
+        # Calculate utilization rate
+        total_time = sum(mode_durations.values())
+        utilization_rate = mode_durations['working'] / total_time if total_time > 0 else 0.0
+        
+        return {
+            'utilization_rate': utilization_rate,
+            'working_time': mode_durations['working'],
+            'total_time': total_time,
+            'window_start': window_start_time,
+            'window_end': window_end_time
+        }
+
     def _get_moving_window_throughput(self, window_end_time=None):
         """Calculate throughput for a moving window ending at specified time"""
         if window_end_time is None:
             window_end_time = self.env.now
         
-        window_start_time = window_end_time - self.throughput_window_size
+        window_start_time = window_end_time - self.time_based_window_size
         
         # Find events within the window
         window_events = [
@@ -383,8 +458,8 @@ class Station(StationaryObject):
         total_parts = sum(event['parts'] for event in window_events)
         
         # Calculate rates (per time unit)
-        carrier_rate = total_carriers / self.throughput_window_size
-        parts_rate = total_parts / self.throughput_window_size
+        carrier_rate = total_carriers / self.time_based_window_size
+        parts_rate = total_parts / self.time_based_window_size
         
         return {
             'carriers_in_window': total_carriers,
@@ -405,8 +480,8 @@ class Station(StationaryObject):
         
         # Calculate throughput for each of the last N windows
         for i in range(num_windows):
-            window_end = current_time - (i * self.throughput_window_size)
-            if window_end >= self.throughput_window_size:  # Ensure we have a full window
+            window_end = current_time - (i * self.time_based_window_size)
+            if window_end >= self.time_based_window_size:  # Ensure we have a full window
                 window_data = self._get_moving_window_throughput(window_end)
                 window_rates.append(window_data['carrier_rate'])
         
@@ -440,6 +515,16 @@ class Station(StationaryObject):
         if 'current_work_in_process' in self.state.names:
             self.state['current_work_in_process'].update(current_window['parts_in_window'])
 
+        # get utilization 
+        utilization_data = self._get_moving_window_utilization()
+        if 'utilization_rate' in self.state.names:
+            self.state['utilization_rate'].update(utilization_data['utilization_rate'])
+        if 'working_time' in self.state.names:
+            self.state['working_time'].update(utilization_data['working_time'])
+        if 'total_time' in self.state.names:
+            self.state['total_time'].update(utilization_data['total_time'])
+
+
     def get_throughput_for_period(self, start_time, end_time):
         """Get throughput data for a specific time period"""
         period_events = [
@@ -467,8 +552,8 @@ class Station(StationaryObject):
         windows = []
         
         for i in range(num_windows):
-            window_end = current_time - (i * self.throughput_window_size)
-            if window_end >= self.throughput_window_size:
+            window_end = current_time - (i * self.time_based_window_size)
+            if window_end >= self.time_based_window_size:
                 window_data = self._get_moving_window_throughput(window_end)
                 windows.append(window_data)
         
@@ -476,7 +561,7 @@ class Station(StationaryObject):
     
     def get_recent_throughput(self, time_periods=5):
         """Get throughput for the last N time periods"""
-        return self.throughput_history[-time_periods:] if len(self.throughput_history) >= time_periods else self.throughput_history
+        return self.throughput_[-time_periods:] if len(self.throughput_) >= time_periods else self.throughput_
 
 class Assembly(Station):
     """
@@ -505,6 +590,7 @@ class Assembly(Station):
         processing_std=None,
         NOK_part_error_time=2,
         worker_pool=None,
+        use_rates=False
     ):
 
         super().__init__(
@@ -513,8 +599,12 @@ class Assembly(Station):
             processing_time=processing_time,
             processing_std=processing_std,
             worker_pool=worker_pool,
+            use_rates=use_rates,
         )
         self.NOK_part_error_time = NOK_part_error_time
+        self.scrap_events = []
+        self.scrap_window_size = self.time_based_window_size
+        self.scrap_moving_window_lookback = 5
 
         if buffer_in is not None:
             self._connect_to_input(buffer_in)
@@ -529,29 +619,60 @@ class Assembly(Station):
             self.buffer_return = buffer_return.connect_to_input(self)
 
     def init_state(self):
-        self.state = ObjectStates(
-            DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-            DiscreteState('mode', categories=['working', 'waiting', 'failing']),
-            TokenState(name='carrier', is_observable=False),
-            TokenState(name='carrier_component', is_observable=False),
-            CountState('n_scrap_parts', is_actionable=False, is_observable=True),
-            CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
-            NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),
-            # Time-based throughput metrics
-            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
-            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
-            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
-        )
-        self.state['on'].update(True)
-        self.state['mode'].update("waiting")
-        self.state['carrier'].update(None)
-        self.state['carrier_component'].update(None)
-        self.state['n_scrap_parts'].update(0)
-        self.state['processing_time'].update(self.processing_time)
-        self.state['n_workers'].update(self.n_workers)
-        self.state['throughput_rate'].update(0.0)
-        self.state['current_window_throughput'].update(0)
-        self.state['avg_throughput_last_5_windows'].update(0.0)
+        if self.use_rates:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']), # OBS
+                TokenState(name='carrier', is_observable=False),
+                TokenState(name='carrier_component', is_observable=False),
+                CountState('n_scrap_parts', is_actionable=False, is_observable=False), # turn off the observation
+                CountState('n_workers', is_actionable=False, is_observable=False, vmin=0),                
+                NumericState('n_workers_proportion', is_actionable=False, is_observable=True, vmin=0),# OBS
+                NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),# OBS
+                # Time-based throughput metrics
+                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0, vmax=1),# OBS
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),# OBS
+                NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),# OBS
+                NumericState('scrap_rate', is_actionable=False, is_observable=True, vmin=0),# OBS
+                NumericState('avg_scrap_last_5_windows', is_actionable=False, is_observable=True, vmin=0),# OBS
+            )
+        else:
+            # uses none rate states
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']), # OBS
+                TokenState(name='carrier', is_observable=False),
+                TokenState(name='carrier_component', is_observable=False),
+                CountState('n_scrap_parts', is_actionable=False, is_observable=True),# OBS
+                CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),# OBS
+                NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),# OBS
+                # Time-based throughput metrics
+                CountState('utilization',is_actionable=False, is_observable=True, vmin=0),# OBS
+                CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),# OBS
+                CountState('scrap_in_window', is_actionable=False, is_observable=True, vmin=0),# OBS
+            )
+        if self.use_rates:
+            self.state['on'].update(True)
+            self.state['mode'].update("waiting")
+            self.state['carrier'].update(None)
+            self.state['carrier_component'].update(None)
+            self.state['n_scrap_parts'].update(0)
+            self.state['n_workers_proportion'].update(self.n_workers_proportional)
+            self.state['processing_time'].update(self.processing_time)
+            self.state['throughput_rate'].update(0.0)
+            self.state['avg_throughput_last_5_windows'].update(0.0)
+            self.state['scrap_rate'].update(0)
+            self.state['avg_scrap_last_5_windows'].update(0.0)
+        else:
+            self.state['on'].update(True)
+            self.state['mode'].update("waiting")
+            self.state['carrier'].update(None)
+            self.state['carrier_component'].update(None)
+            self.state['n_scrap_parts'].update(0)
+            self.state['n_workers'].update(self.n_workers)
+            self.state['processing_time'].update(self.processing_time)
+            self.state['current_window_throughput'].update(0)
+            self.state['scrap_in_window'].update(0.0)
 
     def connect_to_component_input(self, station, *args, **kwargs):
         buffer = Buffer(name=f"Buffer_{station.name}_to_{self.name}", *args, **kwargs)
@@ -619,7 +740,10 @@ class Assembly(Station):
             return 0.0
 
     def _update_scrap_metrics(self):
-        """Update scrap metrics in state (if desired)"""
+        """Update scrap metrics in state"""
+        if not hasattr(self, 'state'):
+            return
+            
         current_window = self._get_moving_window_scrap()
         if 'scrap_in_window' in self.state.names:
             self.state['scrap_in_window'].update(current_window['scrap_in_window'])
@@ -629,7 +753,11 @@ class Assembly(Station):
             avg_rate = self._get_moving_average_scrap(5)
             self.state['avg_scrap_last_5_windows'].update(avg_rate)
 
-
+    def _update_throughput_metrics(self):
+        """Override to include scrap metrics"""
+        super()._update_throughput_metrics()  # Call parent method
+        self._update_scrap_metrics()  # Add scrap metrics
+    
     def _draw_info(self, screen):
         self._draw_n_workers(screen)
 
@@ -639,9 +767,12 @@ class Assembly(Station):
             if self.is_on():
 
                 yield self.env.process(self.request_workers())
+                if 'n_workers_proportion' in self.state.names:
+                    self.state['n_workers_proportion'].update(self.n_workers_proportional)
                 self.state['n_workers'].update(self.n_workers)
                 # Wait to get part from buffer_in
                 yield self.env.process(self.set_to_waiting())
+                self._record_utilization_time_based('waiting')
                 carrier = yield self.env.process(self.buffer_in())
 
                 # Update current_carrier and count parts of carrier
@@ -657,6 +788,7 @@ class Assembly(Station):
                     # Check component
                     if self._has_invalid_components_on_carrier(carrier_component):
                         yield self.env.process(self.set_to_error())
+                        self._record_utilization_time_based('failing')
                         yield self.env.timeout(self.NOK_part_error_time)
                         self.state['n_scrap_parts'].increment()
                         # record scrap event
@@ -666,6 +798,7 @@ class Assembly(Station):
                             carrier_component.parts.clear()
                             yield self.env.process(self.buffer_return(carrier_component))
                         yield self.env.process(self.set_to_waiting())
+                        self._record_utilization_time_based('waiting')
                         continue
 
                     else:
@@ -674,6 +807,7 @@ class Assembly(Station):
 
                 # Process components
                 yield self.env.process(self.set_to_work())
+                self._record_utilization_time_based('working')
                 processing_time = self._sample_exp_time(
                     time=self.processing_time + carrier.get_additional_processing_time(self.name),
                     scale=self.processing_std,
@@ -695,6 +829,7 @@ class Assembly(Station):
 
                 # Place carrier on buffer_out
                 yield self.env.process(self.set_to_waiting())
+                self._record_utilization_time_based('waiting')
                 yield self.env.process(self.buffer_out(carrier))
                 self.state['carrier'].update(None)
 
@@ -728,6 +863,7 @@ class Process(Station):
         worker_pool=None,
         min_processing_time = 0,
         actionable_processing_time=False,
+        use_rates=False
     ):
 
         super().__init__(
@@ -737,6 +873,7 @@ class Process(Station):
             processing_std=processing_std,
             rework_probability=rework_probability,
             worker_pool=worker_pool,
+            use_rates=use_rates
         )
 
         self.min_processing_time = min_processing_time
@@ -749,17 +886,29 @@ class Process(Station):
 
     def init_state(self):
 
-        self.state = ObjectStates(
-            DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-            DiscreteState('mode', categories=['working', 'waiting', 'failing']),
-            TokenState(name='carrier', is_observable=False),
-            # NumericState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, vmin=self.min_processing_time),
-            DiscreteState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, categories=np.arange(self.min_processing_time, 100, 1.0),),
-            CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
-            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
-            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
-            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
-        )
+        if self.use_rates:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                TokenState(name='carrier', is_observable=False),
+                NumericState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, vmin=self.min_processing_time),
+                CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+                CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
+            )
+        else:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                TokenState(name='carrier', is_observable=False),
+                # NumericState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, vmin=self.min_processing_time),
+                DiscreteState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, categories=np.arange(self.min_processing_time, 100, 1.0),),
+                CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+                CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
+            )
         self.state['on'].update(True)
         self.state['mode'].update("waiting")
         self.state['carrier'].update(None)
@@ -780,11 +929,12 @@ class Process(Station):
                 self.state['n_workers'].update(self.n_workers)
                 # Wait to get part from buffer_in
                 yield self.env.process(self.set_to_waiting())
+                self._record_utilization_time_based('waiting')
                 carrier = yield self.env.process(self.buffer_in())
                 self.state['carrier'].update(carrier.name)
 
                 yield self.env.process(self.set_to_work())
-
+                self._record_utilization_time_based('working')
                 processing_time = self._sample_exp_time(
                     time=self.processing_time + carrier.get_additional_processing_time(self.name),
                     scale=self.processing_std,
@@ -806,6 +956,7 @@ class Process(Station):
 
                 # Wait to place carrier to buffer_out
                 yield self.env.process(self.set_to_waiting())
+                self._record_utilization_time_based('waiting')
                 yield self.env.process(self.buffer_out(carrier))
                 self.state['carrier'].update(None)
 
@@ -860,12 +1011,14 @@ class Source(Station):
         carrier_specs=None,
         carrier_min_creation=1,
         carrier_max_creation=None,
+        use_rates=False,
     ):
         super().__init__(
             name=name,
             position=position,
             processing_time=processing_time,
             processing_std=processing_std,
+            use_rates=use_rates,
         )
         self._assert_init_args(unlimited_carriers, carrier_capacity, buffer_in)
 
@@ -1009,6 +1162,7 @@ class Source(Station):
 
         if waiting_time > 0:
             yield self.env.process(self.set_to_waiting())
+            self._record_utilization_time_based('waiting')
             yield self.env.timeout(waiting_time)
 
     def run(self):
@@ -1016,6 +1170,7 @@ class Source(Station):
         while True:
             if self.is_on():
                 yield self.env.process(self.set_to_waiting())
+                self._record_utilization_time_based('waiting')
                 yield self.env.process(self.wait())
 
                 if self.unlimited_carriers:
@@ -1024,6 +1179,7 @@ class Source(Station):
                     carrier = yield self.env.process(self.buffer_in())
 
                 yield self.env.process(self.set_to_work())
+                self._record_utilization_time_based('working')
                 carrier = yield self.env.process(self.assemble_carrier(carrier))
 
                 # Record time-based throughput
@@ -1033,6 +1189,7 @@ class Source(Station):
                 self._update_throughput_metrics()
 
                 yield self.env.process(self.set_to_waiting())
+                self._record_utilization_time_based('waiting')
                 yield self.env.process(self.buffer_out(carrier))
                 self.state['part'].update(None)
                 self.state['carrier'].update(None)
@@ -1058,12 +1215,14 @@ class Sink(Station):
         processing_time=2,
         processing_std=None,
         position=None,
+        use_rates=False
     ):
         super().__init__(
             name=name,
             processing_time=processing_time,
             processing_std=processing_std,
             position=position,
+            use_rates=use_rates,
         )
 
         if buffer_in is not None:
@@ -1104,6 +1263,7 @@ class Sink(Station):
 
         if hasattr(self, 'buffer_out'):
             yield self.env.process(self.set_to_waiting())
+            self._record_utilization_time_based('waiting')
             carrier.parts.clear()
             yield self.env.process(self.buffer_out(carrier))
 
@@ -1112,8 +1272,10 @@ class Sink(Station):
         while True:
             if self.is_on():
                 yield self.env.process(self.set_to_waiting())
+                self._record_utilization_time_based('waiting')
                 carrier = yield self.env.process(self.buffer_in())
                 yield self.env.process(self.set_to_work())
+                self._record_utilization_time_based('working')
                 self.state['carrier'].update(carrier.name)
 
                 # Wait to place carrier to buffer_out
@@ -1152,6 +1314,7 @@ class Switch(Station):
         position=None,
         processing_time=5,
         alternate=False,
+        use_rates=False,
     ):
         super().__init__(
             name=name,
@@ -1159,6 +1322,7 @@ class Switch(Station):
             processing_time=processing_time,
             # We assume switches do not have variation here
             processing_std=0,
+            use_rates=use_rates,
         )
 
         # time it takes for a model to change buffer_in or buffer_out
@@ -1269,9 +1433,11 @@ class Switch(Station):
     def get(self):
         while True:
             yield self.env.process(self.set_to_waiting())
+            self._record_utilization_time_based('waiting')
             buffer_in = yield self.env.process(self.look_in())
             self.getting_process = None
             yield self.env.process(self.set_to_work())
+            self._record_utilization_time_based('working')
             carrier = yield self.env.process(
                 buffer_in.get()
             )
@@ -1281,6 +1447,7 @@ class Switch(Station):
     def put(self, carrier):
         while True:
             yield self.env.process(self.set_to_waiting())
+            self._record_utilization_time_based('waiting')
             buffer_out = yield self.env.process(self.look_out())
             yield self.env.process(buffer_out.put(carrier))
             self.state['carrier'].update(None)
@@ -1294,6 +1461,7 @@ class Switch(Station):
 
                 # Process
                 yield self.env.process(self.set_to_work())
+                self._record_utilization_time_based('working')
                 yield self.env.timeout(self.processing_time)
 
                 yield self.env.process(self.put(carrier))
@@ -1341,10 +1509,12 @@ class Magazine(Station):
         carrier_specs=None,
         carrier_min_creation=1,
         carrier_max_creation=None,
+        use_rates=False,
     ):
         super().__init__(
             name=name,
             position=position,
+            use_rates=use_rates,
         )
         self._assert_init_args(buffer_in, unlimited_carriers, carriers_in_magazine, carrier_capacity)
 
@@ -1442,11 +1612,13 @@ class Magazine(Station):
         while True:
             yield self.env.process(self._update_magazine())
             yield self.env.process(self.set_to_work())
+            self._record_utilization_time_based('working')
             if len(self.magazine.items) > 0:
                 carrier = yield self.magazine.get()
                 break
             else:
                 yield self.env.process(self.set_to_waiting())
+                self._record_utilization_time_based('waiting')
                 yield self.env.timeout(1)
 
         self.state['carriers_in_magazine'].decrement()
@@ -1503,6 +1675,7 @@ class Magazine(Station):
             if self.is_on():
                 # Get carrier from Magazine
                 yield self.env.process(self.set_to_work())
+                self._record_utilization_time_based('working')
                 carrier = yield self.env.process(self.get_carrier())
 
                 # Record time-based throughput
@@ -1513,6 +1686,7 @@ class Magazine(Station):
                 
                 # Wait to place carrier to buffer_out
                 yield self.env.process(self.set_to_waiting())
+                self._record_utilization_time_based('waiting')
                 yield self.env.process(self.buffer_out(carrier))
                 self.state['carrier'].update(None)
             else:

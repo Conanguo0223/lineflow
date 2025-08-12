@@ -149,12 +149,34 @@ class Line:
                     raise ValueError(f"Invalid buffer name: {obj_name}")
                 else:
                     source_node, target_node = parts
+                    # Add buffer as a node
+                    features = self._objects[obj_name].state.values
+                    observables = self._objects[obj_name].state.observables
+                    # Only keep observables
+                    features = np.array(features, dtype=np.float32)[observables]
+                    
+                    node_info = {
+                        'name': obj_name,
+                        'type': 'Buffer',
+                        'feature': features,
+                        'connects_from': source_node,
+                        'connects_to': target_node
+                    }
+                    nodes[obj_name] = node_info
+                    
+                    # Create edges: source -> buffer -> target
                     edges.append({
                         'source': source_node,
+                        'target': obj_name,  # buffer name
+                        'type': 'feeds_into',
+                        'attributes': []  # Can add attributes if needed
+                    })
+                    
+                    edges.append({
+                        'source': obj_name,  # buffer name
                         'target': target_node,
-                        'buffer': obj_name,
-                        'type': 'downstream',
-                        'attributes': self._objects[obj_name].state.values
+                        'type': 'feeds_from',
+                        'attributes': []  # Can add attributes if needed
                     })
             else:
                 # it's a node
@@ -486,8 +508,15 @@ class Line:
                 features = np.array(features, dtype=np.float32)
                 new_feature = torch.tensor(features, dtype=torch.float)
                 self._graph_states[node_type].x[node_idx] = new_feature
+            elif obj and 'Buffer_' in node_name:
+                # Handle buffer nodes
+                state_values = np.array(obj.state.values, dtype=np.float32)
+                observables = np.array(obj.state.observables, dtype=bool)
+                filtered_values = state_values[observables]
+                new_feature = torch.tensor(filtered_values, dtype=torch.float)
+                self._graph_states[node_type].x[node_idx] = new_feature
             elif obj:
-                # Only keep state_values where observables is True
+                # Regular stations
                 state_values = np.array(obj.state.values, dtype=np.float32)
                 observables = np.array(obj.state.observables, dtype=bool)
                 filtered_values = state_values[observables]
@@ -531,24 +560,24 @@ class Line:
                         self._graph_states[edge_type].edge_attr[i] = torch.tensor(features_from_pool, dtype=torch.float)
                 continue
 
-            # edge_index shape: [2, num_edges], so iterate over columns
-            for i in range(edge_index.shape[1]):
-                src_idx = edge_index[0, i].item()
-                tgt_idx = edge_index[1, i].item()
-                src_name = self.node_types[source_type][src_idx][0]
-                tgt_name = self.node_types[target_type][tgt_idx][0]
-                # check if tgt_name is Worker
-                if src_name.startswith("W") and src_name[1:].isdigit():
-                    # src_name looks like "W" followed by a number
-                    continue
-                if tgt_name.startswith("W") and tgt_name[1:].isdigit():
-                    # tgt_name looks like "W" followed by a number
-                    continue
+            # # edge_index shape: [2, num_edges], so iterate over columns
+            # for i in range(edge_index.shape[1]):
+            #     src_idx = edge_index[0, i].item()
+            #     tgt_idx = edge_index[1, i].item()
+            #     src_name = self.node_types[source_type][src_idx][0]
+            #     tgt_name = self.node_types[target_type][tgt_idx][0]
+            #     # check if tgt_name is Worker
+            #     if src_name.startswith("W") and src_name[1:].isdigit():
+            #         # src_name looks like "W" followed by a number
+            #         continue
+            #     if tgt_name.startswith("W") and tgt_name[1:].isdigit():
+            #         # tgt_name looks like "W" followed by a number
+            #         continue
                 
-                edge_name = f"Buffer_{src_name}_to_{tgt_name}"
-                if link_type == 'upstream':
-                    edge_name = f"Buffer_{tgt_name}_to_{src_name}"
-                self._graph_states[edge_type].edge_attr[i] = torch.tensor(self._objects[edge_name].state.values, dtype=torch.float)
+            #     edge_name = f"Buffer_{src_name}_to_{tgt_name}"
+            #     if link_type == 'upstream':
+            #         edge_name = f"Buffer_{tgt_name}_to_{src_name}"
+            #     self._graph_states[edge_type].edge_attr[i] = torch.tensor(self._objects[edge_name].state.values, dtype=torch.float)
                 
     def step_event(self):
         """
@@ -557,7 +586,6 @@ class Line:
         """
         while True:
             yield self.env.timeout(self.step_size)
-
     def run(
         self,
         simulation_end,
@@ -566,6 +594,7 @@ class Line:
         visualize=False,
         capture_screen=False,
         collect_data = False,
+        # record_states = False,
     ):
         """
         Args:
@@ -577,7 +606,9 @@ class Line:
             visualize (bool): If true, line visualization is opened
             capture_screen (bool): Captures last Time frame when screen should be recorded
         """
-
+        # all_states = None
+        # if record_states:
+        #     all_states = []
         if visualize:
             # Stations first, then connectors
             screen = self.setup_draw()
@@ -605,7 +636,9 @@ class Line:
             try:
                 # Step the simulation
                 state, terminated = self.step(simulation_end=simulation_end)
-                print(state)
+                # if all_states is not None:
+                #     all_states.append(state)
+                # print(state)
                 # Collect the current graph state (don't overwrite self._graph_states!)
                 if collect_data:
                     if self._graph_states is not None:
@@ -631,8 +664,14 @@ class Line:
 
         if visualize:
             self.teardown_draw()
-        if collect_data:
+        # return the states
+        # if collect_data and record_states:
+        #     return collected_states, all_states
+        elif collect_data:
             return collected_states
+        # elif record_states:
+        #     return all_states
+        
     def get_observations(self, object_name=None):
         """
         """
