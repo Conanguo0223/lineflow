@@ -160,6 +160,7 @@ class ComplexLine(Line):
             n_carriers=20,
             alternate=True,
             assembly_condition=30,
+            use_rates=False,
             *args,
             **kwargs
     ):
@@ -168,6 +169,7 @@ class ComplexLine(Line):
         self.n_assemblies = n_assemblies
         self.n_workers = n_workers
         self.assembly_condition = assembly_condition
+        self.use_rates = use_rates
 
         super().__init__(*args, **kwargs)
 
@@ -179,14 +181,16 @@ class ComplexLine(Line):
             position=(50, 100),
             carrier_capacity=self.n_assemblies,
             actionable_magazine=False,
+            use_rates=self.use_rates
         )
 
-        pool = WorkerPool(name='Pool', n_workers=self.n_workers, transition_time=2)
+        pool = WorkerPool(name='Pool', n_workers=self.n_workers, transition_time=2, use_rates=self.use_rates)
 
         sink = Sink(
             'EOL',
             position=(self.n_assemblies*100-50, 100),
-            processing_time=2
+            processing_time=2,
+            use_rates=self.use_rates
         )
 
         sink.connect_to_output(magazine, capacity=6, transition_time=6)
@@ -204,7 +208,8 @@ class ComplexLine(Line):
                         f'A{i}': {"assembly_condition": self.assembly_condition} for i in range(self.n_assemblies)
                     }
                 }
-            }
+            },
+            use_rates=self.use_rates
         )
 
         switch = Switch(
@@ -212,6 +217,7 @@ class ComplexLine(Line):
             position=((self.n_assemblies/2)*100, 150),
             alternate=self.alternate,
             processing_time=0,
+            use_rates=self.use_rates
         )
 
         source.connect_to_output(switch, capacity=2, transition_time=2)
@@ -225,6 +231,7 @@ class ComplexLine(Line):
                 processing_time=16+4*i,
                 worker_pool=pool,
                 NOK_part_error_time=2,
+                use_rates=self.use_rates
             )
 
             a.connect_to_component_input(switch, capacity=4, transition_time=4)

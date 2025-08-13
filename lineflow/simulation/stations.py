@@ -31,11 +31,13 @@ class WorkerPool(StationaryObject):
         name,
         n_workers=None,
         transition_time=5,
+        use_rates=False
     ):
         super().__init__()
 
         assert n_workers is not None, "Workers have to be set"
 
+        self.use_rates = use_rates
         self.name = name
         self.n_workers = n_workers
         self.transition_time = transition_time
@@ -53,23 +55,125 @@ class WorkerPool(StationaryObject):
         self.stations.append(station)
         self._station_names.append(station.name)
 
+    def get_connected_stations_throughput_rates(self):
+        """Get throughput rates of all connected stations"""
+        throughput_rates = []
+        
+        for station in self.stations:
+            if hasattr(station, 'state') and 'throughput_rate' in station.state.names:
+                throughput_rate = station.state['throughput_rate'].value
+                throughput_rates.append(throughput_rate)
+            else:
+                # If station doesn't have throughput_rate, default to 0
+                throughput_rates.append(0.0)
+        
+        return throughput_rates
+
+    def get_average_throughput_rate(self):
+        """Get average throughput rate of all connected stations"""
+        throughput_rates = self.get_connected_stations_throughput_rates()
+        
+        if throughput_rates:
+            return sum(throughput_rates) / len(throughput_rates)
+        else:
+            return 0.0
+
+    def get_connected_stations_metrics(self):
+        """Get comprehensive metrics from all connected stations"""
+        station_metrics = {}
+        
+        for station in self.stations:
+            station_name = station.name
+            metrics = {}
+            
+            if hasattr(station, 'state'):
+                # Get throughput rate
+                if 'throughput_rate' in station.state.names:
+                    metrics['throughput_rate'] = station.state['throughput_rate'].value
+                
+                # Get utilization rate
+                if 'utilization_rate' in station.state.names:
+                    metrics['utilization_rate'] = station.state['utilization_rate'].value
+                
+                # Get current window throughput
+                if 'current_window_throughput' in station.state.names:
+                    metrics['current_window_throughput'] = station.state['current_window_throughput'].value
+                
+                # Get processing time
+                if 'processing_time' in station.state.names:
+                    metrics['processing_time'] = station.state['processing_time'].value
+                
+                # Get number of workers (for Assembly stations)
+                if 'n_workers' in station.state.names:
+                    metrics['n_workers'] = station.state['n_workers'].value
+                
+                # Get worker proportion (for rate-based states)
+                if 'n_workers_proportion' in station.state.names:
+                    metrics['n_workers_proportion'] = station.state['n_workers_proportion'].value
+                
+                # Get scrap rate (for Assembly stations)
+                if 'scrap_rate' in station.state.names:
+                    metrics['scrap_rate'] = station.state['scrap_rate'].value
+            
+            station_metrics[station_name] = metrics
+        
+        return station_metrics
+
     def init_state(self):
+        """
+        Initialize the state of the station.
+        
+        basic states (original):
+        4 observables
+        - n_workers                 (observable)
+        - transition_time           (observable)
+        - n_stations                (observable)
+        - worker_assigned_station   (observable)
+
+        rate-wise states:
+        6 observables
+        - n_workers                 (observable)
+        - transition_time           (observable)
+        - n_stations                (observable)
+        - worker_assigned_station   (observable)
+        --------------------------------------------------------------
+        - 
+
+        """
         for worker in self.workers.values():
             worker.init_state(self.stations)
-
-        self.state = ObjectStates(
-            *[
-                worker.state for worker in self.workers.values()
-            ],CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
-            NumericState('transition_time', is_actionable=False, is_observable=True, vmin=0),
-            CountState('n_stations', is_actionable=False, is_observable=True, vmin=0),
-        )
+        
+        if self.use_rates:
+            self.state = ObjectStates(
+                *[
+                    worker.state for worker in self.workers.values()
+                ],CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('transition_time', is_actionable=False, is_observable=True, vmin=0),
+                CountState('n_stations', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('avg_throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+            )
+        else:
+            self.state = ObjectStates(
+                *[
+                    worker.state for worker in self.workers.values()
+                ],CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('transition_time', is_actionable=False, is_observable=True, vmin=0),
+                CountState('n_stations', is_actionable=False, is_observable=True, vmin=0),
+            )
         self.state['transition_time'].update(self.transition_time)
         self.state['n_workers'].update(self.n_workers)
         self.state['n_stations'].update(self.n_stations)
+        if self.use_rates:
+            self.state['avg_throughput_rate'].update(0.0)
         # Distribute worker on stations in round robin fashion
         for worker, station in zip_cycle(self.n_workers, self.n_stations):
             self.state[f"W{worker}"].apply(station)
+
+    def update_avg_throughput_rate(self):
+        """Update the average throughput rate of connected stations"""
+        if hasattr(self.state, 'avg_throughput_rate'):
+            avg_rate = self.get_average_throughput_rate()
+            self.state['avg_throughput_rate'].update(avg_rate)
 
     @property
     def n_stations(self):
@@ -86,7 +190,16 @@ class WorkerPool(StationaryObject):
             worker = self.workers[f"W{worker_n}"]
             # Start working
             self.env.process(worker.work())
+        if self.use_rate:
+            self.env.process(self._throughput_monitoring_loop())
 
+    def _throughput_monitoring_loop(self):
+        """Continuously update average throughput metrics"""
+        while True:
+            if hasattr(self, 'state'):
+                self.update_avg_throughput_rate()
+            yield self.env.timeout(1)  # Update every simulation time unit
+            
     def apply(self, actions):
         """
         This should just update the state of the workers
@@ -105,6 +218,70 @@ class WorkerPool(StationaryObject):
             if worker.state.value == station:
                 requests[worker.name] = worker
         return requests
+    
+    def get_connected_stations_throughput_rates(self):
+        """Get throughput rates of all connected stations"""
+        throughput_rates = []
+        
+        for station in self.stations:
+            if hasattr(station, 'state') and 'throughput_rate' in station.state.names:
+                throughput_rate = station.state['throughput_rate'].value
+                throughput_rates.append(throughput_rate)
+            else:
+                # If station doesn't have throughput_rate, default to 0
+                throughput_rates.append(0.0)
+        
+        return throughput_rates
+
+    def get_average_throughput_rate(self):
+        """Get average throughput rate of all connected stations"""
+        throughput_rates = self.get_connected_stations_throughput_rates()
+        
+        if throughput_rates:
+            return sum(throughput_rates) / len(throughput_rates)
+        else:
+            return 0.0
+
+    def get_connected_stations_metrics(self):
+        """Get comprehensive metrics from all connected stations"""
+        station_metrics = {}
+        
+        for station in self.stations:
+            station_name = station.name
+            metrics = {}
+            
+            if hasattr(station, 'state'):
+                # Get throughput rate
+                if 'throughput_rate' in station.state.names:
+                    metrics['throughput_rate'] = station.state['throughput_rate'].value
+                
+                # Get utilization rate
+                if 'utilization_rate' in station.state.names:
+                    metrics['utilization_rate'] = station.state['utilization_rate'].value
+                
+                # Get current window throughput
+                if 'current_window_throughput' in station.state.names:
+                    metrics['current_window_throughput'] = station.state['current_window_throughput'].value
+                
+                # Get processing time
+                if 'processing_time' in station.state.names:
+                    metrics['processing_time'] = station.state['processing_time'].value
+                
+                # Get number of workers (for Assembly stations)
+                if 'n_workers' in station.state.names:
+                    metrics['n_workers'] = station.state['n_workers'].value
+                
+                # Get worker proportion (for rate-based states)
+                if 'n_workers_proportion' in station.state.names:
+                    metrics['n_workers_proportion'] = station.state['n_workers_proportion'].value
+                
+                # Get scrap rate (for Assembly stations)
+                if 'scrap_rate' in station.state.names:
+                    metrics['scrap_rate'] = station.state['scrap_rate'].value
+            
+            station_metrics[station_name] = metrics
+        
+        return station_metrics
 
 
 class Station(StationaryObject):
@@ -619,37 +796,59 @@ class Assembly(Station):
             self.buffer_return = buffer_return.connect_to_input(self)
 
     def init_state(self):
+        """
+        Initialize the state of the station.
+        
+        basic states (original):
+        4 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - carrier               (non-observable)
+        - carrier_component     (non-observable)
+        - n_scrap_parts         (observable)
+        - n_workers             (observable)
+        - processing_time       (observable)
+        
+        rate-wise states:
+        6 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - carrier               (non-observable)
+        - carrier_component     (non-observable)
+        - n_scrap_parts         (non-observable)
+        - n_workers             (non-observable)
+        --------------------------------------------------------------
+        - scrap_rate            (observable)        org:n_scrap_parts
+        - n_workers_proportion  (observable)        org:n_workers
+        - processing_time       (observable)        
+        - throughput_rate       (observable)        
+        - utilization_rate      (observable)        
+        """
         if self.use_rates:
             self.state = ObjectStates(
                 DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-                DiscreteState('mode', categories=['working', 'waiting', 'failing']), # OBS
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),# OBS
                 TokenState(name='carrier', is_observable=False),
                 TokenState(name='carrier_component', is_observable=False),
-                CountState('n_scrap_parts', is_actionable=False, is_observable=False), # turn off the observation
-                CountState('n_workers', is_actionable=False, is_observable=False, vmin=0),                
-                NumericState('n_workers_proportion', is_actionable=False, is_observable=True, vmin=0),# OBS
+                CountState('n_scrap_parts', is_actionable=False, is_observable=False),
+                CountState('n_workers', is_actionable=False, is_observable=False, vmin=0),
                 NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),# OBS
-                # Time-based throughput metrics
-                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0, vmax=1),# OBS
-                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),# OBS
-                NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),# OBS
+                # rate specific metrics
                 NumericState('scrap_rate', is_actionable=False, is_observable=True, vmin=0),# OBS
-                NumericState('avg_scrap_last_5_windows', is_actionable=False, is_observable=True, vmin=0),# OBS
+                NumericState('n_workers_proportion', is_actionable=False, is_observable=True, vmin=0),# OBS
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),# OBS
+                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0),# OBS
             )
         else:
-            # uses none rate states
+            # uses original states
             self.state = ObjectStates(
                 DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-                DiscreteState('mode', categories=['working', 'waiting', 'failing']), # OBS
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
                 TokenState(name='carrier', is_observable=False),
                 TokenState(name='carrier_component', is_observable=False),
-                CountState('n_scrap_parts', is_actionable=False, is_observable=True),# OBS
-                CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),# OBS
-                NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),# OBS
-                # Time-based throughput metrics
-                CountState('utilization',is_actionable=False, is_observable=True, vmin=0),# OBS
-                CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),# OBS
-                CountState('scrap_in_window', is_actionable=False, is_observable=True, vmin=0),# OBS
+                CountState('n_scrap_parts', is_actionable=False, is_observable=True),
+                CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),
             )
         if self.use_rates:
             self.state['on'].update(True)
@@ -657,22 +856,21 @@ class Assembly(Station):
             self.state['carrier'].update(None)
             self.state['carrier_component'].update(None)
             self.state['n_scrap_parts'].update(0)
-            self.state['n_workers_proportion'].update(self.n_workers_proportional)
             self.state['processing_time'].update(self.processing_time)
+            self.state['n_workers'].update(self.n_workers)
+            # rate specific metric
+            self.state['scrap_rate'].update(0.0)
+            self.state['n_workers_proportion'].update(self.n_workers_proportional)
             self.state['throughput_rate'].update(0.0)
-            self.state['avg_throughput_last_5_windows'].update(0.0)
-            self.state['scrap_rate'].update(0)
-            self.state['avg_scrap_last_5_windows'].update(0.0)
+            self.state['utilization_rate'].update(0.0)
         else:
             self.state['on'].update(True)
             self.state['mode'].update("waiting")
             self.state['carrier'].update(None)
             self.state['carrier_component'].update(None)
             self.state['n_scrap_parts'].update(0)
-            self.state['n_workers'].update(self.n_workers)
             self.state['processing_time'].update(self.processing_time)
-            self.state['current_window_throughput'].update(0)
-            self.state['scrap_in_window'].update(0.0)
+            self.state['n_workers'].update(self.n_workers)
 
     def connect_to_component_input(self, station, *args, **kwargs):
         buffer = Buffer(name=f"Buffer_{station.name}_to_{self.name}", *args, **kwargs)
@@ -745,13 +943,19 @@ class Assembly(Station):
             return
             
         current_window = self._get_moving_window_scrap()
-        if 'scrap_in_window' in self.state.names:
-            self.state['scrap_in_window'].update(current_window['scrap_in_window'])
+        
+        # Update scrap rate (scrap per time unit)
         if 'scrap_rate' in self.state.names:
             self.state['scrap_rate'].update(current_window['scrap_rate'])
+            
+        # Update moving average scrap rate
         if 'avg_scrap_last_5_windows' in self.state.names:
             avg_rate = self._get_moving_average_scrap(5)
             self.state['avg_scrap_last_5_windows'].update(avg_rate)
+            
+        # Optional: Update window scrap count if you want to keep this metric
+        if 'scrap_in_window' in self.state.names:
+            self.state['scrap_in_window'].update(current_window['scrap_in_window'])
 
     def _update_throughput_metrics(self):
         """Override to include scrap metrics"""
@@ -793,6 +997,9 @@ class Assembly(Station):
                         self.state['n_scrap_parts'].increment()
                         # record scrap event
                         self._record_scrap_time_based()
+                        # Update scrap rate metrics immediately after scrap event
+                        if self.use_rates:
+                            self._update_scrap_metrics()
                         # send carrier back
                         if hasattr(self, 'buffer_return'):
                             carrier_component.parts.clear()
@@ -885,38 +1092,65 @@ class Process(Station):
             self._connect_to_output(buffer_out)
 
     def init_state(self):
+        """
+        Initialize the state of the station.
+        
+        basic states (original):
+        3 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - carrier               (non-observable)
+        - n_workers             (observable)
+        - processing_time       (observable)
+        
+        rate-wise states:
+        5 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - carrier               (non-observable)
+        - n_workers             (non-observable)
+        - processing_time       (observable)
+        ------------------------------------------------
+        - n_workers_proportion  (observable)
+        - throughput_rate       (observable)
+        - utilization_rate      (observable)
 
+        """
         if self.use_rates:
             self.state = ObjectStates(
                 DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
                 DiscreteState('mode', categories=['working', 'waiting', 'failing']),
                 TokenState(name='carrier', is_observable=False),
-                NumericState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, vmin=self.min_processing_time),
-                CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),
+                CountState('n_workers', is_actionable=False, is_observable=False, vmin=0),
+                # rate specific metrics
+                NumericState('n_workers_proportion', is_actionable=False, is_observable=True, vmin=0),
                 NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
-                CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
-                NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0),
             )
         else:
             self.state = ObjectStates(
                 DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
                 DiscreteState('mode', categories=['working', 'waiting', 'failing']),
                 TokenState(name='carrier', is_observable=False),
-                # NumericState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, vmin=self.min_processing_time),
-                DiscreteState('processing_time', is_actionable=self.actionable_processing_time, is_observable=True, categories=np.arange(self.min_processing_time, 100, 1.0),),
+                NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),
                 CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
-                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
-                CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
-                NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
             )
-        self.state['on'].update(True)
-        self.state['mode'].update("waiting")
-        self.state['carrier'].update(None)
-        self.state['processing_time'].update(self.processing_time)
-        self.state['n_workers'].update(self.n_workers)
-        self.state['throughput_rate'].update(0.0)
-        self.state['current_window_throughput'].update(0)
-        self.state['avg_throughput_last_5_windows'].update(0.0)
+        if self.use_rates:
+            self.state['on'].update(True)
+            self.state['mode'].update("waiting")
+            self.state['carrier'].update(None)
+            self.state['processing_time'].update(self.processing_time)
+            self.state['n_workers'].update(self.n_workers)
+            self.state['n_workers_proportion'].update(self.n_workers_proportional)
+            self.state['throughput_rate'].update(0.0)
+            self.state['utilization_rate'].update(0.0)
+        else:
+            self.state['on'].update(True)
+            self.state['mode'].update("waiting")
+            self.state['carrier'].update(None)
+            self.state['processing_time'].update(self.processing_time)
+            self.state['n_workers'].update(self.n_workers)
 
     def _draw_info(self, screen):
         self._draw_n_workers(screen)
@@ -926,6 +1160,8 @@ class Process(Station):
         while True:
             if self.is_on():
                 yield self.env.process(self.request_workers())
+                if 'n_workers_proportion' in self.state.names:
+                    self.state['n_workers_proportion'].update(self.n_workers_proportional)
                 self.state['n_workers'].update(self.n_workers)
                 # Wait to get part from buffer_in
                 yield self.env.process(self.set_to_waiting())
@@ -1050,38 +1286,79 @@ class Source(Station):
         self.init_waiting_time = waiting_time
 
     def init_state(self):
+        """
+        Initialize the state of the station.
+        
+        basic states (original):
+        3 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - waiting_time          (observable)
+        - carrier               (non-observable)
+        - part                  (non-observable)
+        - carrier_spec          (observable)
+        
+        rate-wise states:
+        5 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - waiting_time          (observable)
+        - carrier               (non-observable)
+        - part                  (non-observable)
+        - carrier_spec          (observable)
+        ------------------------------------------------
+        - throughput_rate       (observable)
+        - utilization_rate      (observable)
 
-        self.state = ObjectStates(
-            DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-            DiscreteState('mode', categories=['working', 'waiting', 'failing']),
-            DiscreteState(
-                name='waiting_time', 
-                categories=np.arange(0, 100, self.waiting_time_step), 
-                is_actionable=self.actionable_waiting_time,
-            ),
-            TokenState(name='carrier', is_observable=False),
-            TokenState(name='part', is_observable=False),
-            DiscreteState(
-                name='carrier_spec', 
-                categories=list(self.carrier_specs.keys()), 
-                is_actionable=False,
-                is_observable=False,
-            ),
-            # Time-based throughput metrics
-            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
-            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
-            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
-        )
-
+        """
+        if self.use_rates:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                DiscreteState(
+                    name='waiting_time', 
+                    categories=np.arange(0, 100, self.waiting_time_step), 
+                    is_actionable=self.actionable_waiting_time,
+                ),
+                TokenState(name='carrier', is_observable=False),
+                TokenState(name='part', is_observable=False),
+                DiscreteState(
+                    name='carrier_spec', 
+                    categories=list(self.carrier_specs.keys()), 
+                    is_actionable=False,
+                    is_observable=True,
+                ),
+                # rate specific metrics
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0),
+            )
+        else:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                DiscreteState(
+                    name='waiting_time', 
+                    categories=np.arange(0, 100, self.waiting_time_step), 
+                    is_actionable=self.actionable_waiting_time,
+                ),
+                TokenState(name='carrier', is_observable=False),
+                TokenState(name='part', is_observable=False),
+                DiscreteState(
+                    name='carrier_spec', 
+                    categories=list(self.carrier_specs.keys()), 
+                    is_actionable=False,
+                    is_observable=True,
+                ),
+            )
         self.state['waiting_time'].update(self.init_waiting_time)
         self.state['on'].update(True)
         self.state['mode'].update("waiting")
         self.state['carrier'].update(None)
         self.state['part'].update(None)
         self.state['carrier_spec'].update(list(self.carrier_specs.keys())[0])
-        self.state['throughput_rate'].update(0.0)
-        self.state['current_window_throughput'].update(0)
-        self.state['avg_throughput_last_5_windows'].update(0.0)
+        if self.use_rates:
+            self.state['throughput_rate'].update(0.0)
+            self.state['utilization_rate'].update(0.0)
 
     def _assert_init_args(self, unlimited_carriers, carrier_capacity, buffer_in):
         if unlimited_carriers:
@@ -1231,26 +1508,54 @@ class Sink(Station):
             self._connect_to_output(buffer_out)
 
     def init_state(self):
+        """
+        Initialize the state of the station.
+        
+        basic states (original):
+        1 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - n_parts_produced      (non-observable)
+        - carrier               (non-observable)
+        
+        rate-wise states:
+        3 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - n_parts_produced      (non-observable)
+        - carrier               (non-observable)
+        ------------------------------------------------
+        - throughput_rate       (observable)
+        - utilization_rate      (observable)
 
-        self.state = ObjectStates(
-            DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-            DiscreteState('mode', categories=['working', 'waiting', 'failing']),
-            CountState('n_parts_produced', is_actionable=False, is_observable=False),
-            TokenState(name='carrier', is_observable=False),
-            # Time-based throughput metrics
-            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
-            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
-            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
-        )
+        """
+        if self.use_rates:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                CountState('n_parts_produced', is_actionable=False, is_observable=False),
+                TokenState(name='carrier', is_observable=False),
+                # rate
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0)
+            )
+        else:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                CountState('n_parts_produced', is_actionable=False, is_observable=False),
+                TokenState(name='carrier', is_observable=False),
+            )
 
         self.state['on'].update(True)
         self.state['mode'].update("waiting")
         self.state['n_parts_produced'].update(0)
         self.state['mode'].update("waiting")
         self.state['carrier'].update(None)
-        self.state['throughput_rate'].update(0.0)
-        self.state['current_window_throughput'].update(0)
-        self.state['avg_throughput_last_5_windows'].update(0.0)
+
+        if self.use_rates:
+            self.state['throughput_rate'].update(0.0)
+            self.state['utilization_rate'].update(0.0)
 
     def remove(self, carrier):
 
@@ -1342,32 +1647,81 @@ class Switch(Station):
         self.alternate = alternate
 
     def init_state(self):
-        self.state = ObjectStates(
-            DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-            DiscreteState('mode', categories=['working', 'waiting', 'failing']),
-            DiscreteState(
-                name='index_buffer_in',
-                categories=list(range(self.n_buffers_in)),
-                is_actionable=not self.alternate and self.n_buffers_in > 1
-            ),
-            DiscreteState(
-                name='index_buffer_out',
-                categories=list(range(self.n_buffers_out)),
-                is_actionable=not self.alternate and self.n_buffers_out > 1),
-            TokenState(name='carrier', is_observable=False),
-            # Time-based throughput metrics
-            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
-            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
-            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
-        )
+        """
+        Initialize the state of the station.
+        
+        basic states (original):
+        3 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - index_buffer_in       (observable)
+        - index_buffer_out      (observable)
+
+        rate-wise states:
+        9 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - index_buffer_in       (observable)
+        - index_buffer_out      (observable)
+        ------------------------------------------------
+        - avg_fill_up_stream        (observable)
+        - avg_fill_down_stream      (observable)
+        - current_buffer_in_fill    (observable)
+        - current_buffer_out_fill   (observable)
+        - throughput_rate           (observable)
+        - utilization_rate          (observable)
+
+        """
+        if self.use_rates:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                DiscreteState(
+                    name='index_buffer_in',
+                    categories=list(range(self.n_buffers_in)),
+                    is_actionable=not self.alternate and self.n_buffers_in > 1
+                ),
+                DiscreteState(
+                    name='index_buffer_out',
+                    categories=list(range(self.n_buffers_out)),
+                    is_actionable=not self.alternate and self.n_buffers_out > 1),
+                TokenState(name='carrier', is_observable=False),
+                # rate specific metrics
+                NumericState('avg_fill_up_stream', is_actionable=False, is_observable=True,vmin=0),
+                NumericState('avg_fill_down_stream', is_actionable=False, is_observable=True,vmin=0),
+                NumericState('current_buffer_in_fill', is_actionable=False, is_observable=True, vmin=0, vmax=1),
+                NumericState('current_buffer_out_fill', is_actionable=False, is_observable=True, vmin=0, vmax=1),
+                NumericState('throughput_rate', is_actionable=False, is_observable=True,vmin=0),
+                NumericState('utilization_rate', is_actionable=False, is_observable=True,vmin=0),
+            )
+        else:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                DiscreteState(
+                    name='index_buffer_in',
+                    categories=list(range(self.n_buffers_in)),
+                    is_actionable=not self.alternate and self.n_buffers_in > 1
+                ),
+                DiscreteState(
+                    name='index_buffer_out',
+                    categories=list(range(self.n_buffers_out)),
+                    is_actionable=not self.alternate and self.n_buffers_out > 1
+                ),
+                TokenState(name='carrier', is_observable=False),
+            )
         self.state['index_buffer_in'].update(0)
         self.state['index_buffer_out'].update(0)
         self.state['on'].update(True)
         self.state['mode'].update("waiting")
         self.state['carrier'].update(None)
-        self.state['throughput_rate'].update(0.0)
-        self.state['current_window_throughput'].update(0)
-        self.state['avg_throughput_last_5_windows'].update(0.0)
+        if self.use_rates:
+            self.state['avg_fill_upstream'].update(0.0)
+            self.state['avg_fill_downstream'].update(0.0)
+            self.state['current_buffer_in_fill'].update(0.0)
+            self.state['current_buffer_out_fill'].update(0.0)
+            self.state['throughput_rate'].update(0.0)
+            self.state['utilization_rate'].update(0.0)
 
     @property
     def n_buffers_in(self):
@@ -1453,6 +1807,64 @@ class Switch(Station):
             self.state['carrier'].update(None)
             return
 
+    def get_input_buffer_fill_rates(self):
+        """Get fill rates of all input buffers"""
+        fill_rates = []
+        for buffer_method in self.buffer_in:
+            buffer_obj = buffer_method.__self__  # Get the actual buffer object
+            fill_rate = buffer_obj.get_fillstate()  # This returns fill percentage (0.0 to 1.0)
+            fill_rates.append(fill_rate)
+        return fill_rates
+
+    def get_current_input_buffer_fill_rate(self):
+        """Get fill rate of currently selected input buffer"""
+        current_buffer_idx = self.state['index_buffer_in'].value
+        buffer_obj = self.buffer_in[current_buffer_idx].__self__
+        return buffer_obj.get_fillstate()
+
+    def get_output_buffer_fill_rates(self):
+        """Get fill rates of all output buffers"""
+        fill_rates = []
+        for buffer_method in self.buffer_out:
+            buffer_obj = buffer_method.__self__  # Get the actual buffer object
+            fill_rate = buffer_obj.get_fillstate()  # This returns fill percentage (0.0 to 1.0)
+            fill_rates.append(fill_rate)
+        return fill_rates
+
+    def get_current_output_buffer_fill_rate(self):
+        """Get fill rate of currently selected output buffer"""
+        current_buffer_idx = self.state['index_buffer_out'].value
+        buffer_obj = self.buffer_out[current_buffer_idx].__self__
+        return buffer_obj.get_fillstate()
+    
+    def _update_buffer_fill_metrics(self):
+        """Update buffer fill rate metrics in state"""
+        if not hasattr(self, 'state') or not self.use_rates:
+            return
+
+        # Update upstream (input) buffer fill rates
+        input_fill_rates = self.get_input_buffer_fill_rates()
+        if input_fill_rates:
+            avg_upstream_fill = sum(input_fill_rates) / len(input_fill_rates)
+            self.state['avg_fill_upstream'].update(avg_upstream_fill)
+            
+            current_input_fill = input_fill_rates[self.state['index_buffer_in'].value]
+            self.state['current_buffer_in_fill'].update(current_input_fill)
+
+        # Update downstream (output) buffer fill rates
+        output_fill_rates = self.get_output_buffer_fill_rates()
+        if output_fill_rates:
+            avg_downstream_fill = sum(output_fill_rates) / len(output_fill_rates)
+            self.state['avg_fill_downstream'].update(avg_downstream_fill)
+            
+            current_output_fill = output_fill_rates[self.state['index_buffer_out'].value]
+            self.state['current_buffer_out_fill'].update(current_output_fill)
+    
+    def _update_throughput_metrics(self):
+        """Override to include buffer fill metrics"""
+        super()._update_throughput_metrics()  # Call parent method
+        self._update_buffer_fill_metrics()  # Add buffer fill metrics
+
     def run(self):
         while True:
             if self.is_on():
@@ -1537,29 +1949,69 @@ class Magazine(Station):
         self.carrier_min_creation = carrier_min_creation
         self.carrier_max_creation = carrier_max_creation if carrier_max_creation is not None else 2*carrier_min_creation
         self._carrier_counter = 0
+        # Add magazine state tracking
+        self.magazine_state_events = []
+        self.magazine_window_size = self.time_based_window_size
+        self.magazine_moving_window_lookback = 5
 
     def init_state(self):
+        """
+        Initialize the state of the station.
+        
+        basic states (original):
+        3 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - carriers_in_magazine  (observable)
+        - carrier               (non-observable)
+        - part                  (non-observable)
 
-        self.state = ObjectStates(
-            DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
-            DiscreteState('mode', categories=['working', 'waiting', 'failing']),
-            CountState('carriers_in_magazine', is_actionable=self.actionable_magazine, is_observable=True),
-            TokenState(name='carrier', is_observable=False),
-            TokenState(name='part', is_observable=False),
-            # Time-based throughput metrics
-            NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
-            CountState('current_window_throughput', is_actionable=False, is_observable=True, vmin=0),
-            NumericState('avg_throughput_last_5_windows', is_actionable=False, is_observable=True, vmin=0),
-        )
+        rate-wise states:
+        9 observables
+        - on                    (non-observable)
+        - mode                  (observable)
+        - carriers_in_magazine  (observable)
+        - carrier               (non-observable)
+        - part                  (non-observable)
+        ------------------------------------------------
+        - magazine_utilization_rate (observable)
+        - throughput_rate           (observable)
+        - utilization_rate          (observable)
+
+        """
+        if self.use_rates:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                CountState('carriers_in_magazine', is_actionable=self.actionable_magazine, is_observable=True),
+                TokenState(name='carrier', is_observable=False),
+                TokenState(name='part', is_observable=False),
+                # rate-wise states
+                NumericState('avg_carriers_in_magazine', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('magazine_utilization_rate', is_actionable=False, is_observable=True, vmin=0, vmax=1),
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0),
+            )
+        else:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                CountState('carriers_in_magazine', is_actionable=self.actionable_magazine, is_observable=True),
+                TokenState(name='carrier', is_observable=False),
+                TokenState(name='part', is_observable=False),
+            )
+        
 
         self.state['carriers_in_magazine'].update(self.init_carriers_in_magazine)
         self.state['on'].update(True)
         self.state['mode'].update("waiting")
         self.state['carrier'].update(None)
         self.state['part'].update(None)
-        self.state['throughput_rate'].update(0.0)
-        self.state['current_window_throughput'].update(0)
-        self.state['avg_throughput_last_5_windows'].update(0.0)
+        if self.use_rates:
+            self.state['avg_carriers_in_magazine'].update(float(self.init_carriers_in_magazine))
+            self.state['magazine_utilization_rate'].update(1.0 if self.init_carriers_in_magazine > 0 else 0.0)
+            self.state['throughput_rate'].update(0.0)
+            self.state['utilization_rate'].update(0.0)
 
 
     def _assert_init_args(self, buffer_in, unlimited_carriers, carriers_in_magazine, carrier_capacity):
@@ -1622,6 +2074,8 @@ class Magazine(Station):
                 yield self.env.timeout(1)
 
         self.state['carriers_in_magazine'].decrement()
+        if self.use_rates:
+            self._record_magazine_state_time_based()
         return carrier
 
     def _buffer_in_to_magazine(self):
@@ -1632,6 +2086,9 @@ class Magazine(Station):
     def add_carrier_to_magazine(self, carrier):
         yield self.magazine.put(carrier)
         self.state['carriers_in_magazine'].increment()
+        # Record state change for rate calculation
+        if self.use_rates:
+            self._record_magazine_state_time_based()
 
     def _update_magazine(self):
         '''
@@ -1663,6 +2120,132 @@ class Magazine(Station):
             carrier = yield self.env.process(self.get_carrier_from_magazine())
         self.state["carrier"].update(carrier.name)
         return carrier
+
+    def _record_magazine_state_time_based(self):
+        """Record magazine state with timestamp"""
+        current_time = self.env.now
+        current_carriers = self.state['carriers_in_magazine'].value
+        
+        self.magazine_state_events.append({
+            'timestamp': current_time,
+            'carriers_count': current_carriers
+        })
+        
+        # Keep only events within reasonable time (e.g., last 10 windows)
+        cutoff_time = current_time - (self.magazine_window_size * 10)
+        self.magazine_state_events = [
+            event for event in self.magazine_state_events 
+            if event['timestamp'] > cutoff_time
+        ]
+
+    def _get_moving_window_magazine_metrics(self, window_end_time=None):
+        """Calculate magazine metrics for a moving window"""
+        if window_end_time is None:
+            window_end_time = self.env.now
+        
+        window_start_time = window_end_time - self.magazine_window_size
+        
+        # Find events within the window
+        window_events = [
+            event for event in self.magazine_state_events
+            if window_start_time <= event['timestamp'] <= window_end_time
+        ]
+        
+        if not window_events:
+            current_carriers = self.state['carriers_in_magazine'].value
+            return {
+                'avg_carriers_in_magazine': current_carriers,
+                'max_carriers_in_magazine': current_carriers,
+                'min_carriers_in_magazine': current_carriers,
+                'magazine_utilization_rate': current_carriers / self.init_carriers_in_magazine if self.init_carriers_in_magazine > 0 else 0.0,
+                'magazine_fill_rate': current_carriers / self.init_carriers_in_magazine if self.init_carriers_in_magazine > 0 else 0.0
+            }
+        
+        # Calculate statistics
+        carrier_counts = [event['carriers_count'] for event in window_events]
+        avg_carriers = sum(carrier_counts) / len(carrier_counts)
+        max_carriers = max(carrier_counts)
+        min_carriers = min(carrier_counts)
+        
+        # Magazine utilization rate (how full the magazine is on average)
+        if hasattr(self, 'init_carriers_in_magazine') and self.init_carriers_in_magazine > 0:
+            utilization_rate = avg_carriers / self.init_carriers_in_magazine
+            fill_rate = avg_carriers / self.init_carriers_in_magazine
+        else:
+            # For unlimited magazines, use current max as reference
+            utilization_rate = avg_carriers / max(1, max_carriers)
+            fill_rate = avg_carriers / max(1, max_carriers)
+        
+        return {
+            'avg_carriers_in_magazine': avg_carriers,
+            'max_carriers_in_magazine': max_carriers,
+            'min_carriers_in_magazine': min_carriers,
+            'magazine_utilization_rate': utilization_rate,
+            'magazine_fill_rate': fill_rate,
+            'window_start': window_start_time,
+            'window_end': window_end_time
+        }
+
+    def _get_moving_average_magazine_metrics(self, num_windows=None):
+        """Calculate moving average of magazine metrics over multiple windows"""
+        if num_windows is None:
+            num_windows = self.magazine_moving_window_lookback
+        
+        current_time = self.env.now
+        window_metrics = []
+        
+        for i in range(num_windows):
+            window_end = current_time - (i * self.magazine_window_size)
+            if window_end >= self.magazine_window_size:
+                window_data = self._get_moving_window_magazine_metrics(window_end)
+                window_metrics.append(window_data)
+        
+        if window_metrics:
+            avg_carriers = sum(m['avg_carriers_in_magazine'] for m in window_metrics) / len(window_metrics)
+            avg_utilization = sum(m['magazine_utilization_rate'] for m in window_metrics) / len(window_metrics)
+            return {
+                'avg_carriers_last_windows': avg_carriers,
+                'avg_utilization_last_windows': avg_utilization
+            }
+        else:
+            return {
+                'avg_carriers_last_windows': 0.0,
+                'avg_utilization_last_windows': 0.0
+            }
+
+    def _update_magazine_metrics(self):
+        """Update magazine metrics in state"""
+        if not hasattr(self, 'state') or not self.use_rates:
+            return
+        
+        # Record current state
+        self._record_magazine_state_time_based()
+        
+        # Get current window metrics
+        current_window = self._get_moving_window_magazine_metrics()
+        
+        # Update state variables
+        if 'avg_carriers_in_magazine' in self.state.names:
+            self.state['avg_carriers_in_magazine'].update(current_window['avg_carriers_in_magazine'])
+        
+        if 'magazine_utilization_rate' in self.state.names:
+            self.state['magazine_utilization_rate'].update(current_window['magazine_utilization_rate'])
+        
+        if 'magazine_fill_rate' in self.state.names:
+            self.state['magazine_fill_rate'].update(current_window['magazine_fill_rate'])
+        
+        # Update moving averages
+        moving_avg = self._get_moving_average_magazine_metrics(5)
+        if 'avg_carriers_last_5_windows' in self.state.names:
+            self.state['avg_carriers_last_5_windows'].update(moving_avg['avg_carriers_last_windows'])
+        
+        if 'avg_magazine_utilization_last_5_windows' in self.state.names:
+            self.state['avg_magazine_utilization_last_5_windows'].update(moving_avg['avg_utilization_last_windows'])
+
+    def _update_throughput_metrics(self):
+        """Override to include magazine metrics"""
+        super()._update_throughput_metrics()  # Call parent method
+        self._update_magazine_metrics()  # Add magazine metrics
 
     def run(self):
         # Initially fill the magazine with carriers

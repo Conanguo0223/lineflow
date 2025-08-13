@@ -126,8 +126,9 @@ class Line:
             object_states[name] = obj.state
 
         self.state = LineStates(object_states, self.env)
-        self.nodes, self.edges = self.build_graph_info()
+        
         if self.use_graph_as_states:
+            self.nodes, self.edges = self.build_graph_info()
             self._graph_states = self.build_graph_state(self.nodes, self.edges)
 
     def build_graph_info(self):

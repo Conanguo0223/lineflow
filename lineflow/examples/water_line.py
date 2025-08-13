@@ -84,6 +84,7 @@ class WaterLine(Line):
         clean_fill.connect_to_input(blow_molding, capacity=50, transition_time=2, min_transition_time=2, controllable_transition_time=True)
         wrap_heat.connect_to_input(clean_fill, capacity=50, transition_time=2, min_transition_time=2, controllable_transition_time=True)
         robo_arm.connect_to_input(wrap_heat, capacity=50, transition_time=2, min_transition_time=2, controllable_transition_time=True)
+
 def visualize_station_states(line, simulation_time=1000):
     """Create a comprehensive dashboard of all station states"""
     
@@ -342,8 +343,8 @@ def validate_time_series_states(line, simulation_time=1000, sample_interval=10):
 
 if __name__ == '__main__':
     line = WaterLine(use_graph_as_states=True)
-    visualize_station_states(line, simulation_time=1000)
-    # list_of_states =line.run(simulation_end=4000, visualize=False, capture_screen=False)
+    # visualize_station_states(line, simulation_time=1000)
+    list_of_states =line.run(simulation_end=4000, visualize=False, capture_screen=False)
     # history = validate_time_series_states(line, simulation_time=1000, sample_interval=5)    # import pickle
     # with open('water_line_states.pkl', 'wb') as f:
     #     pickle.dump(list_of_states, f)
