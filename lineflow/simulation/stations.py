@@ -125,24 +125,27 @@ class WorkerPool(StationaryObject):
         
         basic states (original):
         4 observables
-        - n_workers                 (observable)
-        - transition_time           (observable)
-        - n_stations                (observable)
-        - worker_assigned_station   (observable)
+        - n_workers                     (observable)
+        - transition_time               (observable)
+        - n_stations                    (observable)
+        - assigned_station*n_workers    (observable)
 
         rate-wise states:
         6 observables
-        - n_workers                 (observable)
-        - transition_time           (observable)
-        - n_stations                (observable)
-        - worker_assigned_station   (observable)
+        - n_workers                     (observable)
+        - transition_time               (observable)
+        - n_stations                    (observable)
+        - assigned_station*n_workers    (non-observable)
         --------------------------------------------------------------
-        - 
+        - avg_throughput_rate           (observable)
 
         """
         for worker in self.workers.values():
-            worker.init_state(self.stations)
-        
+            if self.use_rates:
+                worker.init_state(self.stations, is_observable=False)
+            else:
+                worker.init_state(self.stations)
+
         if self.use_rates:
             self.state = ObjectStates(
                 *[
@@ -190,7 +193,7 @@ class WorkerPool(StationaryObject):
             worker = self.workers[f"W{worker_n}"]
             # Start working
             self.env.process(worker.work())
-        if self.use_rate:
+        if self.use_rates:
             self.env.process(self._throughput_monitoring_loop())
 
     def _throughput_monitoring_loop(self):
@@ -965,6 +968,15 @@ class Assembly(Station):
     def _draw_info(self, screen):
         self._draw_n_workers(screen)
 
+    def _get_edge_features_to_pool(self):
+        features = []
+        # throughput rate, buffer_in/buffer_out fill rates
+        throughput_rate = self.state['throughput_rate'].value if 'throughput_rate' in self.state.names else 0.0
+        in_buffer_fill_rate = self.buffer_in.__self__.get_fillstate()
+        out_buffer_fill_rate = self.buffer_out.__self__.get_fillstate()
+        features.extend([throughput_rate, in_buffer_fill_rate, out_buffer_fill_rate])
+        return np.array(features, dtype=np.float32)
+
     def run(self):
 
         while True:
@@ -1716,8 +1728,8 @@ class Switch(Station):
         self.state['mode'].update("waiting")
         self.state['carrier'].update(None)
         if self.use_rates:
-            self.state['avg_fill_upstream'].update(0.0)
-            self.state['avg_fill_downstream'].update(0.0)
+            self.state['avg_fill_up_stream'].update(0.0)
+            self.state['avg_fill_down_stream'].update(0.0)
             self.state['current_buffer_in_fill'].update(0.0)
             self.state['current_buffer_out_fill'].update(0.0)
             self.state['throughput_rate'].update(0.0)
@@ -1846,7 +1858,7 @@ class Switch(Station):
         input_fill_rates = self.get_input_buffer_fill_rates()
         if input_fill_rates:
             avg_upstream_fill = sum(input_fill_rates) / len(input_fill_rates)
-            self.state['avg_fill_upstream'].update(avg_upstream_fill)
+            self.state['avg_fill_up_stream'].update(avg_upstream_fill)
             
             current_input_fill = input_fill_rates[self.state['index_buffer_in'].value]
             self.state['current_buffer_in_fill'].update(current_input_fill)
@@ -1855,8 +1867,8 @@ class Switch(Station):
         output_fill_rates = self.get_output_buffer_fill_rates()
         if output_fill_rates:
             avg_downstream_fill = sum(output_fill_rates) / len(output_fill_rates)
-            self.state['avg_fill_downstream'].update(avg_downstream_fill)
-            
+            self.state['avg_fill_down_stream'].update(avg_downstream_fill)
+
             current_output_fill = output_fill_rates[self.state['index_buffer_out'].value]
             self.state['current_buffer_out_fill'].update(current_output_fill)
     

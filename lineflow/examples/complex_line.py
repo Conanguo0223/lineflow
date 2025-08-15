@@ -268,7 +268,8 @@ if __name__ == '__main__':
                 scrap_factor=scrap_factor,
                 random_state=0,
                 assembly_condition=30,
-                use_graph_as_states=True # test graph
+                use_graph_as_states=True, # test graph,
+                use_rates=True
             )
 
             agent = make_agent(

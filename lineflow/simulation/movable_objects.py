@@ -80,13 +80,13 @@ class Worker(object):
 
         yield self.assignment.put(station)
 
-    def init_state(self, stations):
+    def init_state(self, stations,is_observable=True):
 
         self.stations = stations
         self.state = DiscreteState(
             name=self.name,
             categories=[s.name for s in self.stations],
-            is_observable=True,
+            is_observable=is_observable,
             is_actionable=True,
         )
 
