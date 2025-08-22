@@ -23,6 +23,7 @@ from lineflow.learning.helpers import (
 from lineflow.learning.curriculum import CurriculumLearningCallback
 from lineflow.examples import (
     WaitingTime,
+    ComplexLine
 )
 
 @dataclass
@@ -169,12 +170,20 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-
+    n_cells = 4
     # env setup
     # envs = gym.vector.SyncVectorEnv(
     #     [make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)],
     # )
-    line = WaitingTime(use_graph_as_states=True)
+    # line = WaitingTime(use_graph_as_states=True)
+    line = ComplexLine(
+            alternate=False,
+            n_assemblies=n_cells,
+            n_workers=3*n_cells,
+            scrap_factor=0 ,
+            step_size=10,
+            info=[],
+            )
     envs = make_stacked_vec_env(
         line=line,
         simulation_end=100+1,

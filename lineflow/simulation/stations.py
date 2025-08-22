@@ -31,13 +31,15 @@ class WorkerPool(StationaryObject):
         name,
         n_workers=None,
         transition_time=5,
-        use_rates=False
+        use_rates=False,
+        use_normalization=False
     ):
         super().__init__()
 
         assert n_workers is not None, "Workers have to be set"
 
         self.use_rates = use_rates
+        self.use_normalization = use_normalization
         self.name = name
         self.n_workers = n_workers
         self.transition_time = transition_time
@@ -118,6 +120,41 @@ class WorkerPool(StationaryObject):
             station_metrics[station_name] = metrics
         
         return station_metrics
+    
+    def _normalize_n_workers(self, n_workers, max_workers=15.0):
+        """Normalize number of workers to [0, 1] range"""
+        return min(n_workers / max_workers, 1.0)
+
+    def _normalize_transition_time(self, transition_time, max_transition_time=40.0):
+        """Normalize transition time to [0, 1] range"""
+        return min(transition_time / max_transition_time, 1.0)
+
+    def _normalize_n_stations(self, n_stations, max_stations=5.0):
+        """Normalize number of stations to [0, 1] range"""
+        return min(n_stations / max_stations, 1.0)
+
+    def _update_normalized_states(self):
+        """Update normalized states based on current discrete/numeric states"""
+        if not self.use_normalization:
+            return
+            
+        # Update normalized n_workers if it exists
+        if 'norm_n_workers' in self.state.names and 'n_workers' in self.state.names:
+            current_n_workers = self.state['n_workers'].value
+            normalized_n_workers = self._normalize_n_workers(current_n_workers)
+            self.state['norm_n_workers'].update(normalized_n_workers)
+        
+        # Update normalized transition_time if it exists
+        if 'norm_transition_time' in self.state.names and 'transition_time' in self.state.names:
+            current_transition_time = self.state['transition_time'].value
+            normalized_transition_time = self._normalize_transition_time(current_transition_time)
+            self.state['norm_transition_time'].update(normalized_transition_time)
+
+        # Update normalized n_stations if it exists
+        if 'norm_n_stations' in self.state.names and 'n_stations' in self.state.names:
+            current_n_stations = self.state['n_stations'].value
+            normalized_n_stations = self._normalize_n_stations(current_n_stations)
+            self.state['norm_n_stations'].update(normalized_n_stations)
 
     def init_state(self):
         """
@@ -146,13 +183,25 @@ class WorkerPool(StationaryObject):
             else:
                 worker.init_state(self.stations)
 
-        if self.use_rates:
+        if self.use_rates and self.use_normalization == False:
             self.state = ObjectStates(
                 *[
                     worker.state for worker in self.workers.values()
                 ],CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
                 NumericState('transition_time', is_actionable=False, is_observable=True, vmin=0),
                 CountState('n_stations', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('avg_throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+            )
+        elif self.use_normalization and self.use_rates:
+            self.state = ObjectStates(
+                *[
+                    worker.state for worker in self.workers.values()
+                ],CountState('n_workers', is_actionable=False, is_observable=False, vmin=0),
+                NumericState('norm_n_workers', is_actionable=False, is_observable=True, vmin=0.0, vmax=1.0),
+                NumericState('transition_time', is_actionable=False, is_observable=False, vmin=0),
+                NumericState('norm_transition_time', is_actionable=False, is_observable=True, vmin=0.0, vmax=1.0),
+                CountState('n_stations', is_actionable=False, is_observable=False, vmin=0),
+                NumericState('norm_n_stations', is_actionable=False, is_observable=True, vmin=0.0, vmax=1.0),
                 NumericState('avg_throughput_rate', is_actionable=False, is_observable=True, vmin=0),
             )
         else:
@@ -168,13 +217,17 @@ class WorkerPool(StationaryObject):
         self.state['n_stations'].update(self.n_stations)
         if self.use_rates:
             self.state['avg_throughput_rate'].update(0.0)
+            if self.use_normalization:
+                self.state['norm_n_workers'].update(self._normalize_n_workers(self.n_workers))
+                self.state['norm_transition_time'].update(self._normalize_transition_time(self.transition_time))
+                self.state['norm_n_stations'].update(self._normalize_n_stations(self.n_stations))
         # Distribute worker on stations in round robin fashion
         for worker, station in zip_cycle(self.n_workers, self.n_stations):
             self.state[f"W{worker}"].apply(station)
 
     def update_avg_throughput_rate(self):
         """Update the average throughput rate of connected stations"""
-        if hasattr(self.state, 'avg_throughput_rate'):
+        if 'avg_throughput_rate' in self.state.names:
             avg_rate = self.get_average_throughput_rate()
             self.state['avg_throughput_rate'].update(avg_rate)
 
@@ -302,6 +355,7 @@ class Station(StationaryObject):
         rework_probability=0,
         worker_pool=None,
         use_rates=False,  # test out whether to use rates
+        use_normalization=False
     ):
 
         super().__init__()
@@ -315,6 +369,7 @@ class Station(StationaryObject):
         self.worker_pool = worker_pool
         self.worker_requests = {}
         self.use_rates = use_rates
+        self.use_normalization = use_normalization
         self.state_ = []
         if self.worker_pool is not None:
             self.worker_pool.register_station(self)
@@ -334,7 +389,7 @@ class Station(StationaryObject):
 
         self.worker_assignments = {}
         # Time-based throughput tracking
-        self.time_based_window_size = 10  # Time window size for moving average
+        self.time_based_window_size = 50  # Time window size for moving average
         self.throughput_events = []  # List of (timestamp, carrier_count, part_count)
         self.moving_window_lookback = 5  # Number of window periods to average
         self.utilization_events = []  # List of utilization events
@@ -427,6 +482,8 @@ class Station(StationaryObject):
         yield self.env.timeout(0)
         self._color = 'yellow'
         self.state['mode'].update('waiting')
+        if self.use_normalization:
+            self._update_normalized_states()
         yield self.env.timeout(0)
 
     def request_workers(self):
@@ -462,12 +519,16 @@ class Station(StationaryObject):
         yield self.env.timeout(0)
         self._color = 'red'
         self.state['mode'].update('failing')
+        if self.use_normalization:
+            self._update_normalized_states()
         yield self.env.timeout(0)
 
     def set_to_work(self):
         yield self.env.timeout(0)
         self._color = 'green'
         self.state['mode'].update('working')
+        if self.use_normalization:
+            self._update_normalized_states()
         yield self.env.timeout(0)
 
     def turn_off(self):
@@ -743,6 +804,46 @@ class Station(StationaryObject):
         """Get throughput for the last N time periods"""
         return self.throughput_[-time_periods:] if len(self.throughput_) >= time_periods else self.throughput_
 
+    def _normalize_mode(self, mode):
+        """Normalize mode to [0, 1] range"""
+        mode_mapping = {
+            'waiting': 0.0,
+            'working': 0.5,
+            'failing': 1.0
+        }
+        return mode_mapping.get(mode, 0.0)
+
+    def _normalize_processing_time(self, processing_time, max_processing_time=100.0):
+        """Normalize processing time to [0, 1] range"""
+        return min(processing_time / max_processing_time, 1.0)
+
+    def _normalize_waiting_time(self, waiting_time, max_waiting_time=100.0):
+        """Normalize waiting time to [0, 1] range"""
+        return min(waiting_time / max_waiting_time, 1.0)
+
+    def _update_normalized_states(self):
+        """Update normalized states based on current discrete/numeric states"""
+        if not self.use_normalization:
+            return
+            
+        # Update normalized mode if it exists
+        if 'norm_mode' in self.state.names and 'mode' in self.state.names:
+            current_mode = self.state['mode'].value
+            normalized_mode = self._normalize_mode(current_mode)
+            self.state['norm_mode'].update(normalized_mode)
+        
+        # Update normalized processing time if it exists
+        if 'norm_processing_time' in self.state.names and 'processing_time' in self.state.names:
+            current_processing_time = self.state['processing_time'].value
+            normalized_processing_time = self._normalize_processing_time(current_processing_time)
+            self.state['norm_processing_time'].update(normalized_processing_time)
+
+        # Update normalized waiting time if it exists
+        if 'norm_waiting_time' in self.state.names and 'waiting_time' in self.state.names:
+            current_waiting_time = self.state['waiting_time'].value
+            normalized_waiting_time = self._normalize_waiting_time(current_waiting_time)
+            self.state['norm_waiting_time'].update(normalized_waiting_time)
+
 class Assembly(Station):
     """
     Assembly takes a carrier from `buffer_in` and `buffer_component`, puts the parts of the component
@@ -770,7 +871,8 @@ class Assembly(Station):
         processing_std=None,
         NOK_part_error_time=2,
         worker_pool=None,
-        use_rates=False
+        use_rates=False,
+        use_normalization=False,
     ):
 
         super().__init__(
@@ -780,6 +882,7 @@ class Assembly(Station):
             processing_std=processing_std,
             worker_pool=worker_pool,
             use_rates=use_rates,
+            use_normalization=use_normalization,
         )
         self.NOK_part_error_time = NOK_part_error_time
         self.scrap_events = []
@@ -821,13 +924,13 @@ class Assembly(Station):
         - n_scrap_parts         (non-observable)
         - n_workers             (non-observable)
         --------------------------------------------------------------
+        - processing_time       (observable) 
         - scrap_rate            (observable)        org:n_scrap_parts
-        - n_workers_proportion  (observable)        org:n_workers
-        - processing_time       (observable)        
+        - n_workers_proportion  (observable)        org:n_workers       
         - throughput_rate       (observable)        
         - utilization_rate      (observable)        
         """
-        if self.use_rates:
+        if self.use_rates and self.use_normalization == False:
             self.state = ObjectStates(
                 DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
                 DiscreteState('mode', categories=['working', 'waiting', 'failing']),# OBS
@@ -836,6 +939,23 @@ class Assembly(Station):
                 CountState('n_scrap_parts', is_actionable=False, is_observable=False),
                 CountState('n_workers', is_actionable=False, is_observable=False, vmin=0),
                 NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),# OBS
+                # rate specific metrics
+                NumericState('scrap_rate', is_actionable=False, is_observable=True, vmin=0),# OBS
+                NumericState('n_workers_proportion', is_actionable=False, is_observable=True, vmin=0),# OBS
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),# OBS
+                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0),# OBS
+            )
+        elif self.use_rates and self.use_normalization:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing'], is_observable=False),
+                NumericState('norm_mode', is_actionable=False, is_observable=True, vmin=0),# Normed OBS
+                TokenState(name='carrier', is_observable=False),
+                TokenState(name='carrier_component', is_observable=False),
+                CountState('n_scrap_parts', is_actionable=False, is_observable=False),
+                CountState('n_workers', is_actionable=False, is_observable=False, vmin=0),
+                NumericState('processing_time', is_actionable=False, is_observable=False, vmin=0),
+                NumericState('norm_processing_time', is_actionable=False, is_observable=True, vmin=0),# Normed OBS
                 # rate specific metrics
                 NumericState('scrap_rate', is_actionable=False, is_observable=True, vmin=0),# OBS
                 NumericState('n_workers_proportion', is_actionable=False, is_observable=True, vmin=0),# OBS
@@ -853,27 +973,23 @@ class Assembly(Station):
                 CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
                 NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),
             )
+        self.state['on'].update(True)
+        self.state['mode'].update("waiting")
+        self.state['carrier'].update(None)
+        self.state['carrier_component'].update(None)
+        self.state['n_scrap_parts'].update(0)
+        self.state['processing_time'].update(self.processing_time)
+        self.state['n_workers'].update(self.n_workers)
         if self.use_rates:
-            self.state['on'].update(True)
-            self.state['mode'].update("waiting")
-            self.state['carrier'].update(None)
-            self.state['carrier_component'].update(None)
-            self.state['n_scrap_parts'].update(0)
-            self.state['processing_time'].update(self.processing_time)
-            self.state['n_workers'].update(self.n_workers)
             # rate specific metric
             self.state['scrap_rate'].update(0.0)
             self.state['n_workers_proportion'].update(self.n_workers_proportional)
             self.state['throughput_rate'].update(0.0)
             self.state['utilization_rate'].update(0.0)
-        else:
-            self.state['on'].update(True)
-            self.state['mode'].update("waiting")
-            self.state['carrier'].update(None)
-            self.state['carrier_component'].update(None)
-            self.state['n_scrap_parts'].update(0)
-            self.state['processing_time'].update(self.processing_time)
-            self.state['n_workers'].update(self.n_workers)
+            if self.use_normalization:
+                self.state['norm_mode'].update(0.0)
+                self.state['norm_processing_time'].update(0.0)
+            
 
     def connect_to_component_input(self, station, *args, **kwargs):
         buffer = Buffer(name=f"Buffer_{station.name}_to_{self.name}", *args, **kwargs)
@@ -1034,6 +1150,9 @@ class Assembly(Station):
                 yield self.env.timeout(processing_time)
                 self.state['processing_time'].update(processing_time)
 
+                # Add this line after updating processing_time
+                if self.use_normalization:
+                    self._update_normalized_states()
                 for component in carrier_component:
                     carrier.assemble(component)
 
@@ -1082,7 +1201,8 @@ class Process(Station):
         worker_pool=None,
         min_processing_time = 0,
         actionable_processing_time=False,
-        use_rates=False
+        use_rates=False,
+        use_normalization=False,
     ):
 
         super().__init__(
@@ -1092,7 +1212,8 @@ class Process(Station):
             processing_std=processing_std,
             rework_probability=rework_probability,
             worker_pool=worker_pool,
-            use_rates=use_rates
+            use_rates=use_rates,
+            use_normalization=use_normalization
         )
 
         self.min_processing_time = min_processing_time
@@ -1128,12 +1249,26 @@ class Process(Station):
         - utilization_rate      (observable)
 
         """
-        if self.use_rates:
+        if self.use_rates and self.use_normalization==False:
             self.state = ObjectStates(
                 DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
                 DiscreteState('mode', categories=['working', 'waiting', 'failing']),
                 TokenState(name='carrier', is_observable=False),
                 NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),
+                CountState('n_workers', is_actionable=False, is_observable=False, vmin=0),
+                # rate specific metrics
+                NumericState('n_workers_proportion', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0),
+            )
+        elif self.use_normalization and self.use_rates:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing'], is_observable=False),
+                NumericState('norm_mode', is_actionable=False, is_observable=True, vmin=0),
+                TokenState(name='carrier', is_observable=False),
+                NumericState('processing_time', is_actionable=False, is_observable=False, vmin=0),
+                NumericState('norm_processing_time', is_actionable=False, is_observable=True, vmin=0),
                 CountState('n_workers', is_actionable=False, is_observable=False, vmin=0),
                 # rate specific metrics
                 NumericState('n_workers_proportion', is_actionable=False, is_observable=True, vmin=0),
@@ -1148,21 +1283,18 @@ class Process(Station):
                 NumericState('processing_time', is_actionable=False, is_observable=True, vmin=0),
                 CountState('n_workers', is_actionable=False, is_observable=True, vmin=0),
             )
+        self.state['on'].update(True)
+        self.state['mode'].update("waiting")
+        self.state['carrier'].update(None)
+        self.state['processing_time'].update(self.processing_time)
+        self.state['n_workers'].update(self.n_workers)
         if self.use_rates:
-            self.state['on'].update(True)
-            self.state['mode'].update("waiting")
-            self.state['carrier'].update(None)
-            self.state['processing_time'].update(self.processing_time)
-            self.state['n_workers'].update(self.n_workers)
             self.state['n_workers_proportion'].update(self.n_workers_proportional)
             self.state['throughput_rate'].update(0.0)
             self.state['utilization_rate'].update(0.0)
-        else:
-            self.state['on'].update(True)
-            self.state['mode'].update("waiting")
-            self.state['carrier'].update(None)
-            self.state['processing_time'].update(self.processing_time)
-            self.state['n_workers'].update(self.n_workers)
+            if self.use_normalization:
+                self.state['norm_mode'].update(self.state['mode'].value)
+                self.state['norm_processing_time'].update(self.state['processing_time'].value)
 
     def _draw_info(self, screen):
         self._draw_n_workers(screen)
@@ -1192,7 +1324,8 @@ class Process(Station):
                 processing_time = int(min(99, processing_time))
                 yield self.env.timeout(processing_time)
                 self.state['processing_time'].update(processing_time)
-
+                if self.use_normalization:
+                    self._update_normalized_states()
                 # Release workers
                 self.release_workers()
 
@@ -1260,6 +1393,7 @@ class Source(Station):
         carrier_min_creation=1,
         carrier_max_creation=None,
         use_rates=False,
+        use_normalization=False
     ):
         super().__init__(
             name=name,
@@ -1267,6 +1401,7 @@ class Source(Station):
             processing_time=processing_time,
             processing_std=processing_std,
             use_rates=use_rates,
+            use_normalization=use_normalization
         )
         self._assert_init_args(unlimited_carriers, carrier_capacity, buffer_in)
 
@@ -1323,7 +1458,7 @@ class Source(Station):
         - utilization_rate      (observable)
 
         """
-        if self.use_rates:
+        if self.use_rates and self.use_normalization == False:
             self.state = ObjectStates(
                 DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
                 DiscreteState('mode', categories=['working', 'waiting', 'failing']),
@@ -1332,6 +1467,30 @@ class Source(Station):
                     categories=np.arange(0, 100, self.waiting_time_step), 
                     is_actionable=self.actionable_waiting_time,
                 ),
+                TokenState(name='carrier', is_observable=False),
+                TokenState(name='part', is_observable=False),
+                DiscreteState(
+                    name='carrier_spec', 
+                    categories=list(self.carrier_specs.keys()), 
+                    is_actionable=False,
+                    is_observable=True,
+                ),
+                # rate specific metrics
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0),
+            )
+        elif self.use_rates and self.use_normalization:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing'], is_observable=False),
+                NumericState('norm_mode', is_actionable=False, is_observable=True, vmin=0),
+                DiscreteState(
+                    name='waiting_time', 
+                    categories=np.arange(0, 100, self.waiting_time_step), 
+                    is_actionable=self.actionable_waiting_time,
+                    is_observable=False
+                ),
+                NumericState('norm_waiting_time', is_actionable=False, is_observable=True, vmin=0),
                 TokenState(name='carrier', is_observable=False),
                 TokenState(name='part', is_observable=False),
                 DiscreteState(
@@ -1371,6 +1530,17 @@ class Source(Station):
         if self.use_rates:
             self.state['throughput_rate'].update(0.0)
             self.state['utilization_rate'].update(0.0)
+            if self.use_normalization:
+                self.state['norm_mode'].update(0.0)
+                self.state['norm_waiting_time'].update(0.0)
+
+    def apply(self, actions):
+        """Override apply to update normalized states when discrete states change"""
+        super().apply(actions)
+        
+        # Update normalized states after applying actions
+        if self.use_normalization:
+            self._update_normalized_states()
 
     def _assert_init_args(self, unlimited_carriers, carrier_capacity, buffer_in):
         if unlimited_carriers:
@@ -1448,6 +1618,10 @@ class Source(Station):
     def wait(self):
 
         waiting_time = self.state['waiting_time'].to_str()
+        
+        # Update normalized waiting time after any programmatic changes
+        if self.use_normalization:
+            self._update_normalized_states()
 
         if waiting_time > 0:
             yield self.env.process(self.set_to_waiting())
@@ -1504,7 +1678,8 @@ class Sink(Station):
         processing_time=2,
         processing_std=None,
         position=None,
-        use_rates=False
+        use_rates=False,
+        use_normalization=False
     ):
         super().__init__(
             name=name,
@@ -1512,6 +1687,7 @@ class Sink(Station):
             processing_std=processing_std,
             position=position,
             use_rates=use_rates,
+            use_normalization=use_normalization
         )
 
         if buffer_in is not None:
@@ -1541,10 +1717,21 @@ class Sink(Station):
         - utilization_rate      (observable)
 
         """
-        if self.use_rates:
+        if self.use_rates and self.use_normalization == False:
             self.state = ObjectStates(
                 DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
                 DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                CountState('n_parts_produced', is_actionable=False, is_observable=False),
+                TokenState(name='carrier', is_observable=False),
+                # rate
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0)
+            )
+        elif self.use_rates and self.use_normalization:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing'], is_observable=False),
+                NumericState('norm_mode', is_actionable=False, is_observable=True, vmin=0),
                 CountState('n_parts_produced', is_actionable=False, is_observable=False),
                 TokenState(name='carrier', is_observable=False),
                 # rate
@@ -1568,6 +1755,8 @@ class Sink(Station):
         if self.use_rates:
             self.state['throughput_rate'].update(0.0)
             self.state['utilization_rate'].update(0.0)
+            if self.use_normalization:
+                self.state['norm_mode'].update(0.0)
 
     def remove(self, carrier):
 
@@ -1632,6 +1821,7 @@ class Switch(Station):
         processing_time=5,
         alternate=False,
         use_rates=False,
+        use_normalization=False
     ):
         super().__init__(
             name=name,
@@ -1640,6 +1830,7 @@ class Switch(Station):
             # We assume switches do not have variation here
             processing_std=0,
             use_rates=use_rates,
+            use_normalization=use_normalization,
         )
 
         # time it takes for a model to change buffer_in or buffer_out
@@ -1684,7 +1875,7 @@ class Switch(Station):
         - utilization_rate          (observable)
 
         """
-        if self.use_rates:
+        if self.use_rates and self.use_normalization == False:
             self.state = ObjectStates(
                 DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
                 DiscreteState('mode', categories=['working', 'waiting', 'failing']),
@@ -1697,6 +1888,44 @@ class Switch(Station):
                     name='index_buffer_out',
                     categories=list(range(self.n_buffers_out)),
                     is_actionable=not self.alternate and self.n_buffers_out > 1),
+                TokenState(name='carrier', is_observable=False),
+                # rate specific metrics
+                NumericState('avg_fill_up_stream', is_actionable=False, is_observable=True,vmin=0),
+                NumericState('avg_fill_down_stream', is_actionable=False, is_observable=True,vmin=0),
+                NumericState('current_buffer_in_fill', is_actionable=False, is_observable=True, vmin=0, vmax=1),
+                NumericState('current_buffer_out_fill', is_actionable=False, is_observable=True, vmin=0, vmax=1),
+                NumericState('throughput_rate', is_actionable=False, is_observable=True,vmin=0),
+                NumericState('utilization_rate', is_actionable=False, is_observable=True,vmin=0),
+            )
+        elif self.use_normalization and self.use_rates:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing']),
+                NumericState('norm_mode', is_actionable=False, is_observable=True, vmin=0),
+                DiscreteState(
+                    name='index_buffer_in',
+                    categories=list(range(self.n_buffers_in)),
+                    is_actionable=not self.alternate and self.n_buffers_in > 1,
+                    is_observable=False
+                ),
+                DiscreteState(
+                    name='index_buffer_out',
+                    categories=list(range(self.n_buffers_out)),
+                    is_actionable=not self.alternate and self.n_buffers_out > 1,
+                    is_observable=False
+                ),
+                NumericState(
+                    name='normalized_index_buffer_in',
+                    is_actionable=False,
+                    is_observable=True,
+                    vmin=0
+                ),
+                NumericState(
+                    name='normalized_index_buffer_out',
+                    is_actionable=False,
+                    is_observable=True,
+                    vmin=0
+                ),
                 TokenState(name='carrier', is_observable=False),
                 # rate specific metrics
                 NumericState('avg_fill_up_stream', is_actionable=False, is_observable=True,vmin=0),
@@ -1734,7 +1963,57 @@ class Switch(Station):
             self.state['current_buffer_out_fill'].update(0.0)
             self.state['throughput_rate'].update(0.0)
             self.state['utilization_rate'].update(0.0)
+            if self.use_normalization:
+                self.state['normalized_index_buffer_in'].update(0.0)
+                self.state['normalized_index_buffer_out'].update(0.0)
+    
+    def _normalize_buffer_index(self, index, num_buffers):
+        """Normalize buffer index to [0, 1] range"""
+        if num_buffers <= 1:
+            return 0.0
+        return index / (num_buffers - 1)
 
+    def _normalize_buffer_index_new(self, index):
+        """Normalize buffer index to [0, 1] range
+        with the maximum number of buffers set to 5"""
+        max_buffers = 5
+        return index / (max_buffers - 1)
+
+    def _update_normalized_indices(self):
+        """Update normalized indices based on current discrete indices"""
+        if not self.use_normalization:
+            return
+            
+        # Get current discrete indices
+        current_in_index = self.state['index_buffer_in'].value
+        current_out_index = self.state['index_buffer_out'].value
+        
+        # Normalize indices
+        # normalized_in = self._normalize_buffer_index(current_in_index, self.n_buffers_in)
+        # normalized_out = self._normalize_buffer_index(current_out_index, self.n_buffers_out)
+
+        normalized_in = self._normalize_buffer_index_new(current_in_index)
+        normalized_out = self._normalize_buffer_index_new(current_out_index)
+
+        # Update normalized states
+        self.state['normalized_index_buffer_in'].update(normalized_in)
+        self.state['normalized_index_buffer_out'].update(normalized_out)
+
+    def _alternate_indices(self):
+        self.state['index_buffer_in'].set_next()
+        self.state['index_buffer_out'].set_next()
+        
+        # Update normalized indices when discrete indices change
+        if self.use_normalization:
+            self._update_normalized_indices()
+
+    def apply(self, actions):
+        """Override apply to update normalized indices when discrete indices change"""
+        super().apply(actions)
+        
+        # Update normalized indices after applying actions
+        if self.use_normalization:
+            self._update_normalized_indices()
     @property
     def n_buffers_in(self):
         return len(self.buffer_in)
@@ -1934,11 +2213,13 @@ class Magazine(Station):
         carrier_min_creation=1,
         carrier_max_creation=None,
         use_rates=False,
+        use_normalization=False,
     ):
         super().__init__(
             name=name,
             position=position,
             use_rates=use_rates,
+            use_normalization=use_normalization,
         )
         self._assert_init_args(buffer_in, unlimited_carriers, carriers_in_magazine, carrier_capacity)
 
@@ -1991,15 +2272,29 @@ class Magazine(Station):
         - utilization_rate          (observable)
 
         """
-        if self.use_rates:
+        if self.use_rates and self.use_normalization == False:
             self.state = ObjectStates(
                 DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
                 DiscreteState('mode', categories=['working', 'waiting', 'failing']),
-                CountState('carriers_in_magazine', is_actionable=self.actionable_magazine, is_observable=True),
+                CountState('carriers_in_magazine', is_actionable=self.actionable_magazine, is_observable=False),
                 TokenState(name='carrier', is_observable=False),
                 TokenState(name='part', is_observable=False),
                 # rate-wise states
-                NumericState('avg_carriers_in_magazine', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('avg_carriers_in_magazine', is_actionable=False, is_observable=False, vmin=0),
+                NumericState('magazine_utilization_rate', is_actionable=False, is_observable=True, vmin=0, vmax=1),
+                NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
+                NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0),
+            )
+        elif self.use_normalization and self.use_rates:
+            self.state = ObjectStates(
+                DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
+                DiscreteState('mode', categories=['working', 'waiting', 'failing'], is_observable=False),
+                NumericState('norm_mode', is_actionable=False, is_observable=True, vmin=0),
+                CountState('carriers_in_magazine', is_actionable=self.actionable_magazine, is_observable=False),
+                TokenState(name='carrier', is_observable=False),
+                TokenState(name='part', is_observable=False),
+                # rate-wise states
+                NumericState('avg_carriers_in_magazine', is_actionable=False, is_observable=False, vmin=0),
                 NumericState('magazine_utilization_rate', is_actionable=False, is_observable=True, vmin=0, vmax=1),
                 NumericState('throughput_rate', is_actionable=False, is_observable=True, vmin=0),
                 NumericState('utilization_rate', is_actionable=False, is_observable=True, vmin=0),

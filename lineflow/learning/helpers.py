@@ -7,7 +7,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
 
 
-def make_stacked_vec_env(line, simulation_end, reward="uptime", n_envs=10, n_stack=5, use_graph=False, track_states = []):
+def make_stacked_vec_env(line, simulation_end, reward="uptime", n_envs=10, n_stack=5, track_states = []):
 
     if n_envs > 1:
         env = make_vec_env(
@@ -28,7 +28,6 @@ def make_stacked_vec_env(line, simulation_end, reward="uptime", n_envs=10, n_sta
             line=line,
             simulation_end=simulation_end,
             reward=reward,
-            use_graph=use_graph,
         )
     
     if n_stack > 1:

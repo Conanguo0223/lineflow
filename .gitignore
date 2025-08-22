@@ -63,3 +63,4 @@ tb/*
 *nohup.out
 *.out
 *.err
+old_scripts

@@ -161,6 +161,7 @@ class ComplexLine(Line):
             alternate=True,
             assembly_condition=30,
             use_rates=False,
+            use_normalization=False,
             *args,
             **kwargs
     ):
@@ -170,7 +171,7 @@ class ComplexLine(Line):
         self.n_workers = n_workers
         self.assembly_condition = assembly_condition
         self.use_rates = use_rates
-
+        self.use_normalization = use_normalization
         super().__init__(*args, **kwargs)
 
     def build(self):
@@ -181,16 +182,19 @@ class ComplexLine(Line):
             position=(50, 100),
             carrier_capacity=self.n_assemblies,
             actionable_magazine=False,
-            use_rates=self.use_rates
+            use_rates=self.use_rates,
+            use_normalization=self.use_normalization
         )
 
-        pool = WorkerPool(name='Pool', n_workers=self.n_workers, transition_time=2, use_rates=self.use_rates)
+        pool = WorkerPool(name='Pool', n_workers=self.n_workers, transition_time=2, use_rates=self.use_rates,
+                          use_normalization=self.use_normalization)
 
         sink = Sink(
             'EOL',
             position=(self.n_assemblies*100-50, 100),
             processing_time=2,
-            use_rates=self.use_rates
+            use_rates=self.use_rates,
+            use_normalization=self.use_normalization
         )
 
         sink.connect_to_output(magazine, capacity=6, transition_time=6)
@@ -209,7 +213,8 @@ class ComplexLine(Line):
                     }
                 }
             },
-            use_rates=self.use_rates
+            use_rates=self.use_rates,
+            use_normalization=self.use_normalization
         )
 
         switch = Switch(
@@ -217,7 +222,8 @@ class ComplexLine(Line):
             position=((self.n_assemblies/2)*100, 150),
             alternate=self.alternate,
             processing_time=0,
-            use_rates=self.use_rates
+            use_rates=self.use_rates,
+            use_normalization=self.use_normalization
         )
 
         source.connect_to_output(switch, capacity=2, transition_time=2)
@@ -231,7 +237,8 @@ class ComplexLine(Line):
                 processing_time=16+4*i,
                 worker_pool=pool,
                 NOK_part_error_time=2,
-                use_rates=self.use_rates
+                use_rates=self.use_rates,
+                use_normalization=self.use_normalization
             )
 
             a.connect_to_component_input(switch, capacity=4, transition_time=4)
@@ -257,19 +264,20 @@ if __name__ == '__main__':
             n_assemblies = j
             n_workers = 3*n_assemblies
             scrap_factor = 1/n_assemblies
-
+            step_size = 1
             line = ComplexLine(
                 realtime=False,
                 factor=0.05,
                 alternate=False,
                 n_assemblies=n_assemblies,
                 n_workers=n_workers,
-                step_size=1,
+                step_size=step_size,
                 scrap_factor=scrap_factor,
                 random_state=0,
                 assembly_condition=30,
                 use_graph_as_states=True, # test graph,
-                use_rates=True
+                use_rates=True,
+                use_normalization=True
             )
 
             agent = make_agent(
@@ -288,7 +296,7 @@ if __name__ == '__main__':
             print("Produced: ", line.get_n_parts_produced())
             print("Scrap: ", line.get_n_scrap_parts())
             print("Reward: ",  line.get_n_parts_produced() - line.get_n_scrap_parts()*scrap_factor)
-            save_string = 'data/complex_line_graph_n_assemblies' + str(n_assemblies) + '_waiting_time' + str(waiting_time) + '.pt' # test graph
+            save_string = 'data/complex_line_graph_n_assemblies' + str(n_assemblies) + '_waiting_time' + str(waiting_time) + '_stepsize_' + str(line.step_size) + '.pt' # test graph
             data_dict = {'graph': collected_data, 'waiting_time': waiting_time, 'n_assemblies': n_assemblies, 'Produced': line.get_n_parts_produced(), 'Scrap': line.get_n_scrap_parts(), 'Reward': line.get_n_parts_produced() - line.get_n_scrap_parts()*scrap_factor}
             torch.save(data_dict, save_string) # test graph
             

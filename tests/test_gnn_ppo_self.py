@@ -334,7 +334,6 @@ class PPOTrainer:
             reward="parts",
             n_envs=self.config.num_envs,
             n_stack=1,
-            use_graph=True,
             track_states=['S_component']
         )
         
@@ -356,10 +355,10 @@ class PPOTrainer:
             node_feature_dims
         ).to(self.device)
         
-        # self.agent = ImprovedAgent(
-        #     self.config, 
-        #     self.envs.action_space.nvec[0]
-        # ).to(self.device)
+        self.agent = ImprovedAgent(
+            self.config, 
+            self.envs.action_space.nvec[0]
+        ).to(self.device)
         actionable_nodes = [s for s, b in zip(self.envs.line.state.feature_names, self.envs.line.state.actionables) if b]
         actionable_node_names = [s.split('_')[0] for s in actionable_nodes]
         actionable_nodes = [self.envs.line.node_mapping[t] for t in actionable_node_names]

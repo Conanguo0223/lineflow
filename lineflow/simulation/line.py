@@ -189,14 +189,14 @@ class Line:
                         edges.append({
                             'source': source_node,
                             'target': obj_name,
-                            'type': 'switches_into',
+                            'type': 'switchesinto',
                             'attributes': [source_usage_status]
                         })
                         
                         edges.append({
                             'source': obj_name,
                             'target': target_node,
-                            'type': 'switches_from',
+                            'type': 'switchesfrom',
                             'attributes': [target_usage_status]
                         })
                     
@@ -210,14 +210,14 @@ class Line:
                         edges.append({
                             'source': source_node,
                             'target': obj_name,
-                            'type': 'switches_into',
+                            'type': 'switchesinto',
                             'attributes': [buffer_usage_status]
                         })
                         
                         edges.append({
                             'source': obj_name,
                             'target': target_node,
-                            'type': 'feeds_from',
+                            'type': 'feedsfrom',
                             'attributes': []  # Regular connection to non-switch
                         })
                     
@@ -231,14 +231,14 @@ class Line:
                         edges.append({
                             'source': source_node,
                             'target': obj_name,
-                            'type': 'feeds_into',
+                            'type': 'feedsinto',
                             'attributes': []  # Regular connection from non-switch
                         })
                         
                         edges.append({
                             'source': obj_name,
                             'target': target_node,
-                            'type': 'switches_from',
+                            'type': 'switchesfrom',
                             'attributes': [buffer_usage_status]
                         })
                     
@@ -247,14 +247,14 @@ class Line:
                         edges.append({
                             'source': source_node,
                             'target': obj_name,
-                            'type': 'feeds_into',
+                            'type': 'feedsinto',
                             'attributes': []
                         })
                         
                         edges.append({
                             'source': obj_name,
                             'target': target_node,
-                            'type': 'feeds_from',
+                            'type': 'feedsfrom',
                             'attributes': []
                         })
             else:
@@ -295,13 +295,13 @@ class Line:
                         edges.append({
                             'source': obj_name,
                             'target': station_name,
-                            'type': 'assigned_to',
+                            'type': 'assignedto',
                             'attributes': np.array(features_from_pool, dtype=np.float32)
                         })
                         edges.append({
                             'source': station_name,
                             'target': obj_name,
-                            'type': 'assigned_from',
+                            'type': 'assignedfrom',
                             'attributes': np.array(features_from_assembly, dtype=np.float32)
                         })
                 else:
@@ -448,7 +448,7 @@ class Line:
         # Add self-loop to only the source nodes
         for node_list in node_types['Source']:
             node_name, node_data = node_list
-            edge_type = ('Source', 'self_loop', 'Source')
+            edge_type = ('Source', 'selfloop', 'Source')
             if edge_type not in edge_types:
                 edge_types[edge_type] = []
                 edge_attrs[edge_type] = []
@@ -692,7 +692,7 @@ class Line:
                 continue
             
             # Handle Switch-related edges
-            elif link_type in ['switches_into', 'switches_from']:
+            elif link_type in ['switchesinto', 'switchesfrom']:
                 for i in range(edge_index.shape[1]):
                     src_idx = edge_index[0, i].item()
                     tgt_idx = edge_index[1, i].item()
@@ -722,7 +722,7 @@ class Line:
                 continue
             
             # Handle regular buffer edges (feeds_into, feeds_from, upstream)
-            elif link_type in ['feeds_into', 'feeds_from', 'upstream']:
+            elif link_type in ['feedsinto', 'feedsfrom', 'upstream']:
                 # These edges typically don't have attributes or have empty attributes
                 # If you want to add buffer state as edge attributes, you can do:
                 for i in range(edge_index.shape[1]):

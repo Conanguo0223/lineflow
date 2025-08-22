@@ -69,3 +69,5 @@ def compute_performance_coefficient(n, c=0.3):
     """
     return np.exp(-c*(n-1))
 
+# ============== helpers for GNN visualizations ==============
+

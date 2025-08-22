@@ -63,6 +63,9 @@ class Buffer(Connector):
 
         self._positions_slots = self.capacity * [None]
         self._positions_arrow = self.capacity * [None]
+    def _normalize_transition_time(self, time):
+        max_time = 40
+        return min(time / max_time, 1.0)
 
     def init_state(self):
 
@@ -70,13 +73,15 @@ class Buffer(Connector):
             DiscreteState('on', categories=[True, False], is_actionable=False, is_observable=False),
             NumericState(name='fill', vmin=0, vmax=1, is_observable=True, is_actionable=False),
             # NumericState(name='transition_time', vmin=self.min_transition_time, is_observable=True, is_actionable=self.controllable_transition_time),
-            DiscreteState('transition_time', is_actionable=self.controllable_transition_time, is_observable=True, categories=np.arange(self.min_transition_time, 100, 1.0),)
+            DiscreteState('transition_time', is_actionable=self.controllable_transition_time, is_observable=False, categories=np.arange(self.min_transition_time, 100, 1.0),),
+            NumericState(name='norm_transition_time', is_actionable=False, is_observable=True, vmin=0, vmax=1),
         )
 
         self.state['on'].update(True)
         self.state['fill'].update(0)
         self.state['transition_time'].update(self.transition_time)
-    
+        self.state['norm_transition_time'].update(self._normalize_transition_time(self.transition_time))
+
     def apply(self, actions):
         self.state.apply(actions)
 

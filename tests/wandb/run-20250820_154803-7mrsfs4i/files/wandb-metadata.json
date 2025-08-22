@@ -1,0 +1,50 @@
+{
+  "os": "Linux-6.8.0-65-generic-x86_64-with-glibc2.35",
+  "python": "CPython 3.9.21",
+  "startedAt": "2025-08-20T19:48:03.632578Z",
+  "program": "/home/aipexws1/conan/agile_stem/lineflow/tests/test_gnn_training.ipynb",
+  "codePath": "tests/test_gnn_training.ipynb",
+  "git": {
+    "remote": "git@github.com:Conanguo0223/lineflow.git",
+    "commit": "8e764da8d675b85bfa54181460e54a9f282faa6a"
+  },
+  "email": "conanguo02231998@gmail.com",
+  "root": "/home/aipexws1/conan/agile_stem/lineflow/tests",
+  "host": "aipexws1-Lambda-Vector",
+  "executable": "/home/aipexws1/miniconda3/envs/agilestem/bin/python",
+  "codePathLocal": "test_gnn_training.ipynb",
+  "cpu_count": 24,
+  "cpu_count_logical": 48,
+  "gpu": "NVIDIA RTX 6000 Ada Generation",
+  "gpu_count": 2,
+  "disk": {
+    "/": {
+      "total": "1967317549056",
+      "used": "301351751680"
+    }
+  },
+  "memory": {
+    "total": "269730394112"
+  },
+  "cpu": {
+    "count": 24,
+    "countLogical": 48
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA RTX 6000 Ada Generation",
+      "memoryTotal": "51527024640",
+      "cudaCores": 18176,
+      "architecture": "Ada",
+      "uuid": "GPU-11bd5b99-3d3b-433b-442c-150661f6d774"
+    },
+    {
+      "name": "NVIDIA RTX 6000 Ada Generation",
+      "memoryTotal": "51527024640",
+      "cudaCores": 18176,
+      "architecture": "Ada",
+      "uuid": "GPU-e6027bb3-5684-1a7c-a155-772d1bab94cd"
+    }
+  ],
+  "cudaVersion": "12.8"
+}
