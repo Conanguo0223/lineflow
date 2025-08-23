@@ -395,7 +395,7 @@ class LineSimulation(gym.Env):
             truncated = True
 
         if self.line.use_graph_as_states:
-            observation = _convert_state_to_hetero_graph(state)
+            observation = _convert_hetero_graph_to_dict(state)
         else:
             observation = self._get_observations_as_tensor(state)
         # TODO: add work in process to the reward as penalty
@@ -414,39 +414,6 @@ class LineSimulation(gym.Env):
             self.render()
 
         return observation, reward, terminated, truncated, self._get_info()
-        # actions = self._map_to_action_dict(actions)
-        # self.line.apply(actions)
-
-        # try:
-        #     state, terminated = self.line.step(self.simulation_end)
-        #     truncated = False
-        # except simpy.core.EmptySchedule:
-        #     state = self.line.state
-        #     terminated = True
-        #     truncated = True
-
-        # # Convert state to appropriate observation format
-        # if self.use_graph_as_states:
-        #     # Convert to HeteroData and then to dict for observation space compatibility
-        #     hetero_graph = _convert_state_to_hetero_graph(state)
-        #     observation = _convert_hetero_graph_to_dict(hetero_graph)
-        # else:
-        #     observation = self._get_observations_as_tensor(state)
-
-        # # Calculate reward
-        # if self.reward == "parts":
-        #     reward = (self.line.get_n_parts_produced() - self.n_parts) - \
-        #         self.line.scrap_factor*(self.line.get_n_scrap_parts() - self.n_scrap_parts)
-        # elif self.reward == "uptime":
-        #     reward = self.line.get_uptime(lookback=self.part_reward_lookback).mean()
-
-        # self.n_parts = self.line.get_n_parts_produced()
-        # self.n_scrap_parts = self.line.get_n_scrap_parts()
-
-        # if self.render_mode == "human":
-        #     self.render()
-
-        # return observation, reward, terminated, truncated, self._get_info()
 
     def _get_info(self):
         return self.line.info()
@@ -471,7 +438,8 @@ class LineSimulation(gym.Env):
         # observation vector as state
         if self.line.use_graph_as_states:
             # hetero_graph = _convert_state_to_hetero_graph(state)
-            observation = _convert_hetero_graph_to_dict(state)
+            # observation = _convert_hetero_graph_to_dict(state)
+            observation = state
         else:
             observation = self._get_observations_as_tensor(state)
 

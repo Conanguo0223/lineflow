@@ -193,9 +193,8 @@ def group_indexes_by_type(node_types_list):
 class ImprovedAgent(nn.Module):
     """Enhanced agent with better architecture and regularization"""
 
-    def __init__(self, type: str, config: PPOConfig, action_dim: int):
+    def __init__(self, config: PPOConfig, action_dim: int):
         super().__init__()
-        self.type = type
         # Critic network
         self.critic = nn.Sequential(
             layer_init(nn.Linear(config.hidden_channels, config.critic_hidden_dim)),
@@ -356,8 +355,8 @@ class PPOTrainer:
         ).to(self.device)
         
         self.agent = ImprovedAgent(
-            self.config, 
-            self.envs.action_space.nvec[0]
+            config = self.config, 
+            action_dim = self.envs.action_space.nvec[0]
         ).to(self.device)
         actionable_nodes = [s for s, b in zip(self.envs.line.state.feature_names, self.envs.line.state.actionables) if b]
         actionable_node_names = [s.split('_')[0] for s in actionable_nodes]
@@ -382,7 +381,6 @@ class PPOTrainer:
         # TODO: make this smarter, currently only uses the first action dim for the agents, might have different types?
         for node_type in target_nodes.keys():
             agent_list.append(ImprovedAgent(
-                type=node_type,
                 config=self.config,
                 action_dim=self.envs.action_space.nvec[target_nodes[node_type][0]]
             ).to(self.device))
