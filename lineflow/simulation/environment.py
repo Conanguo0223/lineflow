@@ -395,7 +395,8 @@ class LineSimulation(gym.Env):
             truncated = True
 
         if self.line.use_graph_as_states:
-            observation = _convert_hetero_graph_to_dict(state)
+            # observation = _convert_hetero_graph_to_dict(state)
+            observation = state
         else:
             observation = self._get_observations_as_tensor(state)
         # TODO: add work in process to the reward as penalty
@@ -413,7 +414,7 @@ class LineSimulation(gym.Env):
         if self.render_mode == "human":
             self.render()
 
-        return observation, reward, terminated, truncated, self._get_info()
+        return observation, reward, terminated, self._get_info()
 
     def _get_info(self):
         return self.line.info()
