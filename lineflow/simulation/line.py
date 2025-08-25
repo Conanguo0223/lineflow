@@ -190,14 +190,16 @@ class Line:
                             'source': source_node,
                             'target': obj_name,
                             'type': 'switchesinto',
-                            'attributes': [source_usage_status]
+                            # 'attributes': [source_usage_status]
+                            'attributes': []
                         })
                         
                         edges.append({
                             'source': obj_name,
                             'target': target_node,
                             'type': 'switchesfrom',
-                            'attributes': [target_usage_status]
+                            # 'attributes': [target_usage_status]
+                            'attributes': []
                         })
                     
                     # Case 2: Switch → Buffer → Other
@@ -211,7 +213,8 @@ class Line:
                             'source': source_node,
                             'target': obj_name,
                             'type': 'switchesinto',
-                            'attributes': [buffer_usage_status]
+                            # 'attributes': [buffer_usage_status]
+                            'attributes': []
                         })
                         
                         edges.append({
@@ -239,7 +242,8 @@ class Line:
                             'source': obj_name,
                             'target': target_node,
                             'type': 'switchesfrom',
-                            'attributes': [buffer_usage_status]
+                            # 'attributes': [buffer_usage_status]
+                            'attributes': []
                         })
                     
                     # Case 4: Other → Buffer → Other (no switch involved)
@@ -296,13 +300,15 @@ class Line:
                             'source': obj_name,
                             'target': station_name,
                             'type': 'assignedto',
-                            'attributes': np.array(features_from_pool, dtype=np.float32)
+                            # 'attributes': np.array(features_from_pool, dtype=np.float32)
+                            'attributes': []
                         })
                         edges.append({
                             'source': station_name,
                             'target': obj_name,
                             'type': 'assignedfrom',
-                            'attributes': np.array(features_from_assembly, dtype=np.float32)
+                            # 'attributes': np.array(features_from_assembly, dtype=np.float32)
+                            'attributes': []
                         })
                 else:
                     # if not a workerpool
@@ -434,7 +440,7 @@ class Line:
             source_idx = node_mapping[source_name][1]
             target_idx = node_mapping[target_name][1]
             edge_types[edge_type].append([source_idx, target_idx])
-            edge_attrs[edge_type].append(edge_data.get('attributes'))
+            # edge_attrs[edge_type].append(edge_data.get('attributes'))
             if add_reverse_edges and source_type != 'WorkerPool' and target_type != 'WorkerPool':
                 reverse_edge_type = (target_type, 'upstream', source_type)
                 if reverse_edge_type not in edge_types:
@@ -442,7 +448,7 @@ class Line:
                     edge_attrs[reverse_edge_type] = []
                     edge_mapping[reverse_edge_type] = []
                 edge_types[reverse_edge_type].append([target_idx, source_idx])
-                edge_attrs[reverse_edge_type].append(edge_data.get('attributes'))
+                # edge_attrs[reverse_edge_type].append(edge_data.get('attributes'))
             # edge_mapping[edge_type].append(edge_data.get('buffer', {}))
         
         # Add self-loop to only the source nodes
@@ -458,7 +464,7 @@ class Line:
             # For self-loop, you can use a default attribute or the node's own feature
             # Here, we use zeros as default self-loop attributes
             attr = np.zeros_like(node_data)
-            edge_attrs[edge_type].append(attr)
+            # edge_attrs[edge_type].append(attr)
             # edge_mapping[edge_type].append(f"self_loop_{node_name}")
 
         # Add edges and edge attributes to HeteroData
@@ -469,7 +475,7 @@ class Line:
             attrs = edge_attrs[edge_type]
             if attrs and all(isinstance(a, (list, np.ndarray, torch.Tensor)) for a in attrs):
                 edge_attr_tensor = torch.tensor(np.array(attrs), dtype=torch.float)
-                graph_state[edge_type].edge_attr = edge_attr_tensor
+                # graph_state[edge_type].edge_attr = edge_attr_tensor
             else:
                 pass
 
@@ -662,7 +668,7 @@ class Line:
                     
                     # Get updated features from the station
                     features_from_station = self._objects[src_name]._get_edge_features_to_pool()
-                    self._graph_states[edge_type].edge_attr[i] = torch.tensor(features_from_station, dtype=torch.float)
+                    # self._graph_states[edge_type].edge_attr[i] = torch.tensor(features_from_station, dtype=torch.float)
                 continue
                 
             elif source_type == 'WorkerPool' and target_type in ['Assembly', 'Process']:
@@ -688,7 +694,7 @@ class Line:
                     
                     features_from_pool = [is_assigned, assign_ratio]
                     features_from_pool = np.array(features_from_pool, dtype=np.float32)
-                    self._graph_states[edge_type].edge_attr[i] = torch.tensor(features_from_pool, dtype=torch.float)
+                    # self._graph_states[edge_type].edge_attr[i] = torch.tensor(features_from_pool, dtype=torch.float)
                 continue
             
             # Handle Switch-related edges
@@ -718,7 +724,7 @@ class Line:
                     )
                     
                     # Update edge attribute
-                    self._graph_states[edge_type].edge_attr[i] = torch.tensor([usage_status], dtype=torch.float)
+                    # self._graph_states[edge_type].edge_attr[i] = torch.tensor([usage_status], dtype=torch.float)
                 continue
             
             # Handle regular buffer edges (feeds_into, feeds_from, upstream)
@@ -735,11 +741,11 @@ class Line:
                     if 'Buffer_' in src_name:
                         buffer_obj = self._objects[src_name]
                         fill_state = buffer_obj.get_fillstate() if hasattr(buffer_obj, 'get_fillstate') else 0.0
-                        self._graph_states[edge_type].edge_attr[i] = torch.tensor([fill_state], dtype=torch.float)
+                        # self._graph_states[edge_type].edge_attr[i] = torch.tensor([fill_state], dtype=torch.float)
                     elif 'Buffer_' in tgt_name:
                         buffer_obj = self._objects[tgt_name]
                         fill_state = buffer_obj.get_fillstate() if hasattr(buffer_obj, 'get_fillstate') else 0.0
-                        self._graph_states[edge_type].edge_attr[i] = torch.tensor([fill_state], dtype=torch.float)
+                        # self._graph_states[edge_type].edge_attr[i] = torch.tensor([fill_state], dtype=torch.float)
                     # If no buffer involved, keep empty attributes (or add other relevant info)
                 continue
     def step_event(self):

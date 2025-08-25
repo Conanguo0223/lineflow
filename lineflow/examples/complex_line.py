@@ -10,6 +10,7 @@ from lineflow.simulation import (
     WorkerPool,
 )
 import torch
+import time
 
 def compute_balanced_optimum(state, n_assemblies, n_workers):
     processing_times = np.array([state[f'A{i}']['processing_time'].value for i in range(n_assemblies)])
@@ -275,7 +276,7 @@ if __name__ == '__main__':
                 scrap_factor=scrap_factor,
                 random_state=0,
                 assembly_condition=30,
-                use_graph_as_states=True, # test graph,
+                use_graph_as_states=False, # test graph,
                 use_rates=True,
                 use_normalization=True
             )
@@ -288,17 +289,19 @@ if __name__ == '__main__':
                 n_workers=n_workers,
                 get_max_reward=False
                 )
-
-            # line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False)
-            collected_data = line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False,
-                    collect_data=True # test graph
-                    )
+            start = time.time()
+            line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False)
+            # collected_data = line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False,
+            #         collect_data=True # test graph
+            #         )
+            end = time.time()
             print("Produced: ", line.get_n_parts_produced())
             print("Scrap: ", line.get_n_scrap_parts())
             print("Reward: ",  line.get_n_parts_produced() - line.get_n_scrap_parts()*scrap_factor)
-            save_string = 'data/complex_line_graph_n_assemblies' + str(n_assemblies) + '_waiting_time' + str(waiting_time) + '_stepsize_' + str(line.step_size) + '.pt' # test graph
-            data_dict = {'graph': collected_data, 'waiting_time': waiting_time, 'n_assemblies': n_assemblies, 'Produced': line.get_n_parts_produced(), 'Scrap': line.get_n_scrap_parts(), 'Reward': line.get_n_parts_produced() - line.get_n_scrap_parts()*scrap_factor}
-            torch.save(data_dict, save_string) # test graph
+            print("Time taken: ", end - start)
+            # save_string = 'data/complex_line_graph_n_assemblies' + str(n_assemblies) + '_waiting_time' + str(waiting_time) + '_stepsize_' + str(line.step_size) + '.pt' # test graph
+            # data_dict = {'graph': collected_data, 'waiting_time': waiting_time, 'n_assemblies': n_assemblies, 'Produced': line.get_n_parts_produced(), 'Scrap': line.get_n_scrap_parts(), 'Reward': line.get_n_parts_produced() - line.get_n_scrap_parts()*scrap_factor}
+            # torch.save(data_dict, save_string) # test graph
             
     # ramp_up_waiting_time = 10
     # waiting_time = 2

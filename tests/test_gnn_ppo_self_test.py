@@ -68,6 +68,42 @@ def move_hetero_data_to_device(hetero_data, device):
     return new_data
 
 
+class GATHomo(nn.Module):
+    def __init__(self, hidden_channels, out_channels, num_heads, num_layers, data: HeteroData):
+        super().__init__()
+
+        # projection layers for each node type
+        self.lin_dict = nn.ModuleDict()
+        for node_type in data.node_types:
+            in_channels = data[node_type].x.size(-1)
+            self.lin_dict[node_type] = Linear(in_channels, hidden_channels)
+
+        # GAT layers (homogeneous)
+        self.convs = nn.ModuleList()
+        for _ in range(num_layers):
+            # concat=False keeps feature dim = hidden_channels
+            self.convs.append(GATConv(hidden_channels, hidden_channels, heads=num_heads, concat=False))
+
+        self.lin_out = Linear(hidden_channels, out_channels)
+
+    def forward(self, data: HeteroData):
+        # project each node type to hidden dim (don’t mutate input)
+        for ntype, lin in self.lin_dict.items():
+            data[ntype].x = lin(data[ntype].x).relu()
+
+        # flatten hetero -> homo
+        homo_data = data.to_homogeneous(add_node_type=True)
+        print(homo_data)
+        x, edge_index = homo_data.x, homo_data.edge_index
+
+        # run GAT layers
+        for conv in self.convs:
+            x = conv(x, edge_index).relu()
+
+        out = self.lin_out(x)
+
+        return out, homo_data
+
 
 
 class HGT_policy(torch.nn.Module):
