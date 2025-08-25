@@ -79,48 +79,7 @@ class WorkerPool(StationaryObject):
             return sum(throughput_rates) / len(throughput_rates)
         else:
             return 0.0
-
-    def get_connected_stations_metrics(self):
-        """Get comprehensive metrics from all connected stations"""
-        station_metrics = {}
         
-        for station in self.stations:
-            station_name = station.name
-            metrics = {}
-            
-            if hasattr(station, 'state'):
-                # Get throughput rate
-                if 'throughput_rate' in station.state.names:
-                    metrics['throughput_rate'] = station.state['throughput_rate'].value
-                
-                # Get utilization rate
-                if 'utilization_rate' in station.state.names:
-                    metrics['utilization_rate'] = station.state['utilization_rate'].value
-                
-                # Get current window throughput
-                if 'current_window_throughput' in station.state.names:
-                    metrics['current_window_throughput'] = station.state['current_window_throughput'].value
-                
-                # Get processing time
-                if 'processing_time' in station.state.names:
-                    metrics['processing_time'] = station.state['processing_time'].value
-                
-                # Get number of workers (for Assembly stations)
-                if 'n_workers' in station.state.names:
-                    metrics['n_workers'] = station.state['n_workers'].value
-                
-                # Get worker proportion (for rate-based states)
-                if 'n_workers_proportion' in station.state.names:
-                    metrics['n_workers_proportion'] = station.state['n_workers_proportion'].value
-                
-                # Get scrap rate (for Assembly stations)
-                if 'scrap_rate' in station.state.names:
-                    metrics['scrap_rate'] = station.state['scrap_rate'].value
-            
-            station_metrics[station_name] = metrics
-        
-        return station_metrics
-    
     def _normalize_n_workers(self, n_workers, max_workers=15.0):
         """Normalize number of workers to [0, 1] range"""
         return min(n_workers / max_workers, 1.0)
@@ -246,8 +205,8 @@ class WorkerPool(StationaryObject):
             worker = self.workers[f"W{worker_n}"]
             # Start working
             self.env.process(worker.work())
-        if self.use_rates:
-            self.env.process(self._throughput_monitoring_loop())
+        # if self.use_rates:
+        #     self.env.process(self._throughput_monitoring_loop())
 
     def _throughput_monitoring_loop(self):
         """Continuously update average throughput metrics"""
@@ -263,6 +222,9 @@ class WorkerPool(StationaryObject):
         for worker, station in actions.items():
             worker_obj = self.workers[worker]
             self.env.process(worker_obj.assign(station))
+            # Update metrics only when events occur
+            if self.use_rates:
+                self.update_avg_throughput_rate()
 
     def get_worker(self, name):
         # gather these workers assigned to these station
@@ -297,47 +259,6 @@ class WorkerPool(StationaryObject):
             return sum(throughput_rates) / len(throughput_rates)
         else:
             return 0.0
-
-    def get_connected_stations_metrics(self):
-        """Get comprehensive metrics from all connected stations"""
-        station_metrics = {}
-        
-        for station in self.stations:
-            station_name = station.name
-            metrics = {}
-            
-            if hasattr(station, 'state'):
-                # Get throughput rate
-                if 'throughput_rate' in station.state.names:
-                    metrics['throughput_rate'] = station.state['throughput_rate'].value
-                
-                # Get utilization rate
-                if 'utilization_rate' in station.state.names:
-                    metrics['utilization_rate'] = station.state['utilization_rate'].value
-                
-                # Get current window throughput
-                if 'current_window_throughput' in station.state.names:
-                    metrics['current_window_throughput'] = station.state['current_window_throughput'].value
-                
-                # Get processing time
-                if 'processing_time' in station.state.names:
-                    metrics['processing_time'] = station.state['processing_time'].value
-                
-                # Get number of workers (for Assembly stations)
-                if 'n_workers' in station.state.names:
-                    metrics['n_workers'] = station.state['n_workers'].value
-                
-                # Get worker proportion (for rate-based states)
-                if 'n_workers_proportion' in station.state.names:
-                    metrics['n_workers_proportion'] = station.state['n_workers_proportion'].value
-                
-                # Get scrap rate (for Assembly stations)
-                if 'scrap_rate' in station.state.names:
-                    metrics['scrap_rate'] = station.state['scrap_rate'].value
-            
-            station_metrics[station_name] = metrics
-        
-        return station_metrics
 
 
 class Station(StationaryObject):
@@ -574,7 +495,7 @@ class Station(StationaryObject):
         self.env.process(self.run())
 
         # Start continuous throughput monitoring
-        self.env.process(self._throughput_monitoring_loop())
+        # self.env.process(self._throughput_monitoring_loop())
     
     def _throughput_monitoring_loop(self):
         """Continuously update throughput metrics"""
@@ -627,7 +548,9 @@ class Station(StationaryObject):
             event for event in self.throughput_events 
             if event['timestamp'] > cutoff_time
         ]
-
+        # Update metrics only when events occur
+        if self.use_rates:
+            self._update_throughput_metrics()
     def _get_moving_window_utilization(self, window_end_time=None):
         """Calculate utilization rate for a moving window"""
         if window_end_time is None:
