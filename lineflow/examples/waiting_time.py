@@ -119,6 +119,8 @@ class WaitingTime(Line):
         assembly_condition=35,
         scrap_factor=1,
         R=0.75,
+        use_rates=False,
+        use_normalization=False,
         **kwargs,
     ):
         self.processing_time_source = processing_time_source
@@ -127,7 +129,8 @@ class WaitingTime(Line):
         self.t_jump_max = t_jump_max
         self.assembly_condition = assembly_condition
         self.R = R
-
+        self.use_rates = use_rates
+        self.use_normalization = use_normalization
         if self.with_jump:
             assert self.t_jump_max is not None
         super().__init__(scrap_factor=scrap_factor, **kwargs)
@@ -135,16 +138,18 @@ class WaitingTime(Line):
     def build(self):
 
         source_main = Source(
-            'Source_main',
+            'S_main',
             position=(300, 300),
             processing_time=0,
             carrier_capacity=2,
             actionable_waiting_time=False,
             unlimited_carriers=True,
+            use_rates=self.use_rates,
+            use_normalization=self.use_normalization,
         )
 
         source_component = Source(
-            'Source_component',
+            'S_component',
             position=(500, 450),
             processing_time=self.processing_time_source,
             waiting_time=0,
@@ -155,6 +160,8 @@ class WaitingTime(Line):
             },
             unlimited_carriers=True,
             actionable_waiting_time=True,
+            use_rates=self.use_rates,
+            use_normalization=self.use_normalization,
         )
 
         if self.with_jump:
@@ -172,9 +179,12 @@ class WaitingTime(Line):
                 position=(500, 300),
                 processing_time=20,
                 NOK_part_error_time=5,
+                use_rates=self.use_rates,
+            use_normalization=self.use_normalization,
             )
 
-        sink = Sink('Sink', processing_time=0, position=(700, 300))
+        sink = Sink('Sink', processing_time=0, position=(700, 300), use_rates=self.use_rates,
+            use_normalization=self.use_normalization)
 
         assembly.connect_to_component_input(
             station=source_component,
@@ -184,9 +194,10 @@ class WaitingTime(Line):
         assembly.connect_to_input(source_main, capacity=2, transition_time=2)
         sink.connect_to_input(assembly, capacity=2, transition_time=2)
 
-
 if __name__ == '__main__':
-    line = WaitingTime()
+    line = WaitingTime(use_rates=True,
+            use_normalization=True)
     agent = make_optimal_agent(line)
-    line.run(simulation_end=4000, agent=agent, visualize = True)
+    # line.run(simulation_end=4000, agent=agent, visualize = False)
+    all_states, state_names, action_stations, all_actions, rewards, reward_cumulative = line.run(simulation_end=4000, agent=agent, record_states=True, visualize = False)
     print(line.get_n_parts_produced())

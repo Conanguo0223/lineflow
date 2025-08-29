@@ -12,6 +12,7 @@ from lineflow.simulation.stations import (
     Station,
     Sink,
 )
+from itertools import filterfalse
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,9 @@ class Line:
         if info is None:
             info = []
         self._info = info
-
+        ### test no gym
+        self.n_parts = 0
+        self.n_scrap_parts = 0
         self.reset(random_state=random_state)
 
     @property
@@ -190,16 +193,16 @@ class Line:
                             'source': source_node,
                             'target': obj_name,
                             'type': 'switchesinto',
-                            # 'attributes': [source_usage_status]
-                            'attributes': []
+                            'attributes': [source_usage_status]
+                            # 'attributes': []
                         })
                         
                         edges.append({
                             'source': obj_name,
                             'target': target_node,
                             'type': 'switchesfrom',
-                            # 'attributes': [target_usage_status]
-                            'attributes': []
+                            'attributes': [target_usage_status]
+                            # 'attributes': []
                         })
                     
                     # Case 2: Switch → Buffer → Other
@@ -213,8 +216,8 @@ class Line:
                             'source': source_node,
                             'target': obj_name,
                             'type': 'switchesinto',
-                            # 'attributes': [buffer_usage_status]
-                            'attributes': []
+                            'attributes': [buffer_usage_status]
+                            # 'attributes': []
                         })
                         
                         edges.append({
@@ -300,15 +303,15 @@ class Line:
                             'source': obj_name,
                             'target': station_name,
                             'type': 'assignedto',
-                            # 'attributes': np.array(features_from_pool, dtype=np.float32)
-                            'attributes': []
+                            'attributes': np.array(features_from_pool, dtype=np.float32)
+                            # 'attributes': []
                         })
                         edges.append({
                             'source': station_name,
                             'target': obj_name,
                             'type': 'assignedfrom',
-                            # 'attributes': np.array(features_from_assembly, dtype=np.float32)
-                            'attributes': []
+                            'attributes': np.array(features_from_assembly, dtype=np.float32)
+                            # 'attributes': []
                         })
                 else:
                     # if not a workerpool
@@ -440,7 +443,7 @@ class Line:
             source_idx = node_mapping[source_name][1]
             target_idx = node_mapping[target_name][1]
             edge_types[edge_type].append([source_idx, target_idx])
-            # edge_attrs[edge_type].append(edge_data.get('attributes'))
+            edge_attrs[edge_type].append(edge_data.get('attributes'))
             if add_reverse_edges and source_type != 'WorkerPool' and target_type != 'WorkerPool':
                 reverse_edge_type = (target_type, 'upstream', source_type)
                 if reverse_edge_type not in edge_types:
@@ -448,7 +451,7 @@ class Line:
                     edge_attrs[reverse_edge_type] = []
                     edge_mapping[reverse_edge_type] = []
                 edge_types[reverse_edge_type].append([target_idx, source_idx])
-                # edge_attrs[reverse_edge_type].append(edge_data.get('attributes'))
+                edge_attrs[reverse_edge_type].append(edge_data.get('attributes'))
             # edge_mapping[edge_type].append(edge_data.get('buffer', {}))
         
         # Add self-loop to only the source nodes
@@ -464,7 +467,7 @@ class Line:
             # For self-loop, you can use a default attribute or the node's own feature
             # Here, we use zeros as default self-loop attributes
             attr = np.zeros_like(node_data)
-            # edge_attrs[edge_type].append(attr)
+            edge_attrs[edge_type].append(attr)
             # edge_mapping[edge_type].append(f"self_loop_{node_name}")
 
         # Add edges and edge attributes to HeteroData
@@ -475,7 +478,7 @@ class Line:
             attrs = edge_attrs[edge_type]
             if attrs and all(isinstance(a, (list, np.ndarray, torch.Tensor)) for a in attrs):
                 edge_attr_tensor = torch.tensor(np.array(attrs), dtype=torch.float)
-                # graph_state[edge_type].edge_attr = edge_attr_tensor
+                graph_state[edge_type].edge_attr = edge_attr_tensor
             else:
                 pass
 
@@ -633,7 +636,85 @@ class Line:
                 # return self.state, terminated
 
             self.env.step()
+    ## test for training without gymnasium
+    def _map_to_action_dict(self, actions):
 
+        actions_iterator = filterfalse(
+            lambda n: not self.state[n[0]][n[1]].is_actionable,
+            self.state
+        )
+
+        actions_dict = {}
+        for action, (station, action_name) in zip(actions, actions_iterator):
+            if station not in actions_dict:
+                actions_dict[station] = {}
+
+            actions_dict[station][action_name] = action
+        return actions_dict
+    
+    def _get_observations_as_tensor(self, state):
+
+        X = state.get_observations(lookback=1, include_time=False)
+        return np.array(X, dtype=np.float32)
+    
+    def step_no_gym(self, actions, simulation_end=2000):
+        """
+        Step to the next state of the line
+        Args:
+            simulation_end (int):
+                Time until terminated flag is returned as True. If None
+                terminated is always False.
+        """
+        actions = self._map_to_action_dict(actions)
+        self.apply(actions)
+        try:
+            state, terminated = self.step(simulation_end)
+            truncated = False
+        except simpy.core.EmptySchedule:
+            # TODO: not tested yet
+            state = self.state
+            terminated = True
+            truncated = True
+
+        if self.use_graph_as_states:
+            # observation = _convert_hetero_graph_to_dict(state)
+            observation = state
+        else:
+            observation = self._get_observations_as_tensor(state)
+        # TODO: add work in process to the reward as penalty
+        # if self.reward == "parts":
+        #     reward = (self.line.get_n_parts_produced() - self.n_parts) - \
+        #         self.line.scrap_factor*(self.line.get_n_scrap_parts() - self.n_scrap_parts)
+        # elif self.reward == "uptime":
+        #     reward = self.line.get_uptime(lookback=self.part_reward_lookback).mean()
+        # else:
+        #     assert False, f"Reward {reward} not implemented"
+        reward = (self.get_n_parts_produced() - self.n_parts) - \
+                self.scrap_factor*(self.get_n_scrap_parts() - self.n_scrap_parts)
+
+        self.n_parts = self.get_n_parts_produced()
+        self.n_scrap_parts = self.get_n_scrap_parts()
+
+        # if self.render_mode == "human":
+        #     self.render()
+
+        return observation, reward, terminated, truncated, self.info()
+    def reset_no_gym(self,seed=None,options=None):
+
+        self.reset(random_state=seed)
+        self.n_parts = 0
+        self.n_scrap_parts = 0
+
+        state, _ = self.step()
+        # observation vector as state
+        if self.use_graph_as_states:
+            # hetero_graph = _convert_state_to_hetero_graph(state)
+            # observation = _convert_hetero_graph_to_dict(state)
+            observation = state
+        else:
+            observation = self._get_observations_as_tensor(state)
+
+        return observation, self.info()
     def update_graph_state(self):
         """
         Update graph state including all edge types from build_graph_info
@@ -763,7 +844,7 @@ class Line:
         visualize=False,
         capture_screen=False,
         collect_data = False,
-        # record_states = False,
+        record_states = False,
     ):
         """
         Args:
@@ -775,9 +856,19 @@ class Line:
             visualize (bool): If true, line visualization is opened
             capture_screen (bool): Captures last Time frame when screen should be recorded
         """
-        # all_states = None
-        # if record_states:
-        #     all_states = []
+        all_states = None
+        org_reward_sum = 0
+        reward_test_sum = 0
+        state_names = None
+        action_stations = None
+        all_actions = None
+        uptime_sum = 0
+        if record_states:
+            all_states = []
+            all_actions = []
+            rewards = []
+            reward_cumulative = []
+
         if visualize:
             # Stations first, then connectors
             screen = self.setup_draw()
@@ -805,6 +896,22 @@ class Line:
             try:
                 # Step the simulation
                 state, terminated = self.step(simulation_end=simulation_end)
+                if state_names is None and record_states:
+                    state_names = state.observable_features
+                if record_states:
+                    all_states.append(state.values[state.observables])
+                org_reward = (self.get_n_parts_produced() - self.n_parts) - \
+                    self.scrap_factor*(self.get_n_scrap_parts() - self.n_scrap_parts)
+                
+                self.n_parts = self.get_n_parts_produced()
+                self.n_scrap_parts = self.get_n_scrap_parts()
+                uptime=self.get_uptime(lookback=1).mean()
+                uptime_sum += uptime
+                org_reward_sum += org_reward
+                if record_states:
+                    rewards.append(org_reward)
+                    reward_cumulative.append(org_reward_sum)
+                reward_test_sum += (org_reward+0.25*uptime)
                 # if all_states is not None:
                 #     all_states.append(state)
                 # print(state)
@@ -822,6 +929,10 @@ class Line:
             if agent is not None:
                 actions = agent(self.state, self.env)
                 self.apply(actions)
+                if action_stations is None and record_states:
+                    action_stations = actions.keys()
+                if record_states:
+                    all_actions.append(actions.items())
 
             if visualize:
                 if actions is not None:
@@ -831,6 +942,7 @@ class Line:
         if capture_screen and visualize:
             pygame.image.save(screen, f"{self.name}.png")
 
+        
         if visualize:
             self.teardown_draw()
         # return the states
@@ -838,9 +950,14 @@ class Line:
         #     return collected_states, all_states
         elif collect_data:
             return collected_states
-        # elif record_states:
-        #     return all_states
-        
+        elif record_states:
+            pbar.close()
+            print("Original Reward Sum:", org_reward_sum)
+            print("Test Reward Sum:", reward_test_sum)
+            print("uptime:", uptime_sum / (self.env.now / self.step_size))
+            return all_states, state_names, action_stations, all_actions, rewards, reward_cumulative
+
+
     def get_observations(self, object_name=None):
         """
         """

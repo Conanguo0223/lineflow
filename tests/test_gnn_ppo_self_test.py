@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical
 from torch_geometric.data import HeteroData
-from torch_geometric.nn import HeteroConv, GCNConv, Linear, HGTConv, HANConv
+from torch_geometric.nn import HeteroConv, GCNConv, Linear, HGTConv, HANConv, GATConv
 from lineflow.learning.helpers import make_stacked_vec_env
 from lineflow.examples import (
     WaitingTime,
@@ -17,6 +17,7 @@ import random
 import time
 import matplotlib.pyplot as plt
 import os
+from itertools import filterfalse
 
 # GPU Setup and Detection
 def setup_device():
@@ -244,8 +245,8 @@ class PPOAgent:
         self.policy = HGT_policy(
             hidden_channels=hidden_dim,
             out_channels=None,
-            num_heads=4,
-            num_layers=2,
+            num_heads=1,
+            num_layers=1,
             action_dims=action_dims,
             data=sample_state,
             device=self.device
@@ -744,6 +745,124 @@ def train_ppo_with_evaluation_gpu(env, agent, num_episodes=1000, max_steps=200,
     
     return episode_rewards, eval_results_history
 
+# Update your training functions to include GPU monitoring
+def train_ppo_with_evaluation_gpu_no_gym(line, agent, num_episodes=1000, max_steps=200, 
+                                    update_frequency=10, save_frequency=50,
+                                    eval_frequency=100, num_eval_episodes=5,
+                                    save_dir="ppo_training_results"):
+    """GPU-optimized training loop with memory monitoring"""
+    # Create save directory
+    os.makedirs(save_dir, exist_ok=True)
+    
+    episode_rewards = []
+    episode_lengths = []
+    eval_results_history = []
+    start_time = time.time()
+    
+    eval_env = line
+    
+    print(f"Starting GPU-optimized PPO training...")
+    print(f"Device: {agent.device}")
+    print(f"Results will be saved to: {save_dir}")
+    
+    # Initial GPU memory check
+    if agent.device.type == 'cuda':
+        monitor_gpu_usage()
+    
+    for episode in range(num_episodes):
+        state = line.reset_no_gym()
+        if isinstance(state, tuple):
+            state = state[0]
+        
+        episode_reward = 0
+        episode_length = 0
+        
+        for step in range(max_steps):
+            # Select action (automatically handles device transfer)
+            action_result = agent.select_action(state)
+            
+            # Handle action format
+            actions, log_probs, value = action_result
+            if isinstance(actions, list):
+                action_for_env = np.array(actions)
+            else:
+                action_for_env = np.array([actions])
+            
+            # Take action
+            step_result = line.step_no_gym(action_for_env)
+            
+            if len(step_result) == 4:
+                next_state, reward, done, info = step_result
+            elif len(step_result) == 5:
+                next_state, reward, done, truncated, info = step_result
+                done = done or truncated
+            
+            # Store experience (buffer handles CPU storage)
+            agent.buffer.store(state, actions, reward, value, log_probs, done)
+            
+            episode_reward += reward
+            episode_length += 1
+            state = next_state
+            
+            if done:
+                break
+        
+        episode_rewards.append(episode_reward)
+        episode_lengths.append(episode_length)
+        
+        # Update policy (GPU-optimized)
+        if agent.should_update() or (episode + 1) % update_frequency == 0:
+            update_start = time.time()
+            agent.update()
+            update_time = time.time() - update_start
+            
+            if episode % save_frequency == 0 and episode > 0:
+                print(f"  GPU Update took {update_time:.2f}s")
+                if agent.device.type == 'cuda':
+                    monitor_gpu_usage()
+        
+        # # Evaluation
+        # if (episode + 1) % eval_frequency == 0 or episode == num_episodes - 1:
+        #     print(f"\n--- Evaluation at Episode {episode + 1} ---")
+        #     eval_stats = evaluate_agent(
+        #         agent, eval_env, 
+        #         num_eval_episodes=num_eval_episodes,
+        #         max_steps=max_steps,
+        #         deterministic=True
+        #     )
+            
+        #     eval_results_history.append({
+        #         'episode': episode + 1,
+        #         'stats': eval_stats
+        #     })
+            
+        #     # Save intermediate results
+        #     save_agent(agent, os.path.join(save_dir, f"agent_ep_{episode + 1}.pth"))
+            
+        #     # Monitor GPU after evaluation
+        #     if agent.device.type == 'cuda':
+        #         monitor_gpu_usage()
+        
+        # Progress reporting
+        if episode % save_frequency == 0 and episode > 0:
+            avg_reward = np.mean(episode_rewards[-save_frequency:])
+            avg_length = np.mean(episode_lengths[-save_frequency:])
+            elapsed_time = time.time() - start_time
+            episodes_per_sec = episode / elapsed_time
+            
+            print(f"\nEpisode {episode}")
+            print(f"  Avg Reward: {avg_reward:.2f}")
+            print(f"  Avg Length: {avg_length:.1f}")
+            print(f"  Episodes/sec: {episodes_per_sec:.2f}")
+            print(f"  Buffer size: {len(agent.buffer.states)}")
+            print(f"  Time elapsed: {elapsed_time:.1f}s")
+    
+    # Final cleanup
+    if agent.device.type == 'cuda':
+        torch.cuda.empty_cache()
+        print("GPU cache cleared")
+    
+    return episode_rewards
 
 def test_fast_training():
     """Quick test to verify everything works - WITH BETTER ACTION HANDLING"""
@@ -755,7 +874,7 @@ def test_fast_training():
     #     processing_time_source=5,
     #     use_graph_as_states=True
     # )
-    # line_name = "ComplexLine"
+    line_name = "ComplexLine"
     n_cells = 3
     line = ComplexLine(
         alternate=False,
@@ -1299,18 +1418,23 @@ if __name__ == "__main__":
         test_rewards = test_fast_training()
     else:
         print("Running full GPU-optimized training...")
-        
-        n_cells = 3
-        line_name = "ComplexLine"
-        line = ComplexLine(
-            alternate=False,
-            n_assemblies=n_cells,
-            n_workers=3*n_cells,
-            scrap_factor=1/n_cells,
-            step_size=2,
-            info=[],
-            use_graph_as_states=True
-        )
+        line_name = "WaitingTime"
+        line = WaitingTime(
+                        info=[],
+                        processing_time_source=5,
+                        use_graph_as_states=True
+                        )
+        # n_cells = 3
+        # line_name = "ComplexLine"
+        # line = ComplexLine(
+        #     alternate=False,
+        #     n_assemblies=n_cells,
+        #     n_workers=3*n_cells,
+        #     scrap_factor=1/n_cells,
+        #     step_size=2,
+        #     info=[],
+        #     use_graph_as_states=True
+        # )
             
         env = make_stacked_vec_env(
             line=line,
@@ -1336,7 +1460,7 @@ if __name__ == "__main__":
         agent = PPOAgent(
             sample_state=sample_state,
             action_dims=action_dims,
-            lr=1e-3,
+            lr=3e-3,
             gamma=0.99,
             eps_clip=0.2,
             k_epochs=4,
@@ -1347,8 +1471,8 @@ if __name__ == "__main__":
         )
         
         print("Starting GPU-optimized PPO training...")
-        rewards, eval_history = train_ppo_with_evaluation_gpu(  # Use GPU-optimized version
-            env, agent,
+        rewards, eval_history = train_ppo_with_evaluation_gpu_no_gym(  # Use GPU-optimized version
+            line, agent,
             num_episodes=2000,
             max_steps=1000,
             update_frequency=20,

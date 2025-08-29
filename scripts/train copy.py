@@ -135,7 +135,7 @@ class HeteroGraphFeatureExtractor(BaseFeaturesExtractor):
         return self.final_projection(graph_embedding).unsqueeze(0)
 
 
-def _make_line(name, n_cells, info, simulation_step_size=1, curriculum=False, use_graph_as_states=False, use_normalized=False):
+def _make_line(name, n_cells, info, simulation_step_size=1, curriculum=False, use_graph_as_states=False):
 
     if name == 'part_distribution':
         return MultiProcess(
@@ -161,11 +161,11 @@ def _make_line(name, n_cells, info, simulation_step_size=1, curriculum=False, us
             n_assemblies=n_cells,
             n_workers=3*n_cells,
             scrap_factor=0 if curriculum else 1/n_cells,
-            step_size=simulation_step_size,
+            step_size=10,
             info=info,
             use_graph_as_states=use_graph_as_states,
-            use_rates=use_normalized,
-            use_normalization=use_normalized,
+            use_rates=True,
+            use_normalization=True,
             )
 
     if name == 'waiting_time':
@@ -221,8 +221,7 @@ def train(config):
     #     n_stack=config['n_stack'] if not config['recurrent'] else 1,
     # )
     env_train = make_stacked_vec_env(
-        line=_make_line(config['env'], config['n_cells'], config['info'], curriculum=config['curriculum'], simulation_step_size=config['simulation_step_size']\
-                        , use_graph_as_states=config['use_graph_as_states'], use_normalized=config['use_normalized']),
+        line=_make_line(config['env'], config['n_cells'], config['info'], curriculum=config['curriculum'], use_graph_as_states=config['use_graph_as_states']),
         simulation_end=simulation_end,
         reward=config["rollout_reward"],
         n_envs=config['n_envs'],
@@ -230,8 +229,7 @@ def train(config):
     )
 
     env_eval = make_stacked_vec_env(
-        line=_make_line(config['env'], config['n_cells'], config['info'], curriculum=config['curriculum'], simulation_step_size=config['simulation_step_size']\
-                        , use_graph_as_states=config['use_graph_as_states'], use_normalized=config['use_normalized']),
+        line=_make_line(config['env'], config['n_cells'], config['info'], curriculum=config['curriculum'], use_graph_as_states=config['use_graph_as_states']),
         simulation_end=simulation_end,
         reward=config["eval_reward"],
         n_envs=1,
@@ -365,10 +363,10 @@ if __name__ == '__main__':
         default="[]",
         help="Station info that should be logged like \"[('A1', 'waiting_time')]\""
     )
-    # test hyperparameters
+
     parser.add_argument('--eval_reward', default="parts", type=str)
-    parser.add_argument('--rollout_reward', default="test", type=str)
-    parser.add_argument('--use_normalized', default=False, type=bool)
+    parser.add_argument('--rollout_reward', default="parts", type=str)
+
 
     parser.add_argument('--simulation_step_size', default=1, type=int) # Tim until update is done
     config = parser.parse_args().__dict__

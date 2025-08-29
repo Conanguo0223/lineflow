@@ -11,7 +11,27 @@ from lineflow.simulation import (
 )
 import torch
 import time
+import random
+def make_random_agent(state, n_assemblies, n_workers):
 
+    def agent(state, env):
+        actions = {}
+
+        # Random worker assignment
+        worker_names = [worker.name for worker in state.get_actions()["Pool"]]
+        worker_assignment = np.random.randint(0, n_assemblies, size=len(worker_names))
+        actions['Pool'] = dict(zip(worker_names, worker_assignment))
+
+        # Random switch action
+        actions['Switch'] = {'index_buffer_out': random.randint(0, n_assemblies - 1)}
+
+        # Random source waiting time
+        waiting_times = state['Source']['waiting_time'].categories
+        actions['Source'] = {'waiting_time': random.randint(0, len(waiting_times) - 1)}
+
+        return actions
+
+    return agent
 def compute_balanced_optimum(state, n_assemblies, n_workers):
     processing_times = np.array([state[f'A{i}']['processing_time'].value for i in range(n_assemblies)])
 
@@ -255,8 +275,8 @@ class ComplexLine(Line):
 if __name__ == '__main__':
     # waiting_times = [5, 10, 20, 50]
     # n_assemblies_list = [5, 6]
-    waiting_times = [5]
-    n_assemblies_list = [5]
+    waiting_times = [3]
+    n_assemblies_list = [3]
     for i in waiting_times:
         for j in n_assemblies_list:
             print(f'waiting_time: {i}, n_assemblies: {j}')
@@ -265,7 +285,7 @@ if __name__ == '__main__':
             n_assemblies = j
             n_workers = 3*n_assemblies
             scrap_factor = 1/n_assemblies
-            step_size = 1
+            step_size =1
             line = ComplexLine(
                 realtime=False,
                 factor=0.05,
@@ -276,9 +296,9 @@ if __name__ == '__main__':
                 scrap_factor=scrap_factor,
                 random_state=0,
                 assembly_condition=30,
-                use_graph_as_states=True, # test graph,
-                use_rates=True,
-                use_normalization=True
+                use_graph_as_states=False, # test graph,
+                use_rates=False,
+                use_normalization=False
             )
 
             agent = make_agent(
@@ -290,7 +310,8 @@ if __name__ == '__main__':
                 get_max_reward=False
                 )
             start = time.time()
-            line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False)
+            # line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False)
+            all_states, state_names, action_stations, all_actions, rewards, reward_cumulative = line.run(simulation_end=4000, agent=agent, record_states=True, visualize = False)
             # collected_data = line.run(simulation_end=4000, agent=agent, capture_screen=False, show_status=True, visualize=False,
             #         collect_data=True # test graph
             #         )

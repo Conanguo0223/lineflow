@@ -4,10 +4,13 @@ ENV="complex_line"
 INFO="[]"
 TOTAL_STEPS=100000000
 N=3
+SIM_STEPS=10
+REWARD_TYPE="test"
+USE_NORMALIZED="True"
 
 for SEED in 42 2024 174
 do
-    ./run_rppo.sh $SEED $ENV $N "$INFO" $TOTAL_STEPS
-    ./run_rppo_curriculum.sh $SEED $ENV $N "$INFO" $TOTAL_STEPS
-    ./run_ppo_curriculum.sh $SEED $ENV $N "$INFO" $TOTAL_STEPS
+    ./run_rppo.sh $SEED $ENV $N "$INFO" $TOTAL_STEPS $SIM_STEPS $REWARD_TYPE $USE_NORMALIZED
+    ./run_rppo_curriculum.sh $SEED $ENV $N "$INFO" $TOTAL_STEPS $SIM_STEPS $REWARD_TYPE $USE_NORMALIZED
+    ./run_ppo_curriculum.sh $SEED $ENV $N "$INFO" $TOTAL_STEPS $SIM_STEPS $REWARD_TYPE $USE_NORMALIZED
 done

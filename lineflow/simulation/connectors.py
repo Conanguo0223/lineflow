@@ -74,7 +74,7 @@ class Buffer(Connector):
             NumericState(name='fill', vmin=0, vmax=1, is_observable=True, is_actionable=False),
             # NumericState(name='transition_time', vmin=self.min_transition_time, is_observable=True, is_actionable=self.controllable_transition_time),
             DiscreteState('transition_time', is_actionable=self.controllable_transition_time, is_observable=False, categories=np.arange(self.min_transition_time, 100, 1.0),),
-            NumericState(name='norm_transition_time', is_actionable=False, is_observable=True, vmin=0, vmax=1),
+            NumericState(name='norm_transition_time', is_actionable=False, is_observable=False, vmin=0, vmax=1),
         )
 
         self.state['on'].update(True)

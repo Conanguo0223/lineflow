@@ -23,6 +23,9 @@ from lineflow.simulation.movable_objects import (
     Worker,
 )
 
+from collections import deque
+import bisect
+
 
 class WorkerPool(StationaryObject):
 
@@ -311,9 +314,15 @@ class Station(StationaryObject):
         self.worker_assignments = {}
         # Time-based throughput tracking
         self.time_based_window_size = 50  # Time window size for moving average
-        self.throughput_events = []  # List of (timestamp, carrier_count, part_count)
+        max_events = int(self.time_based_window_size * 20)  # Keep 20 windows worth
+        self.throughput_events = deque(maxlen=max_events)
         self.moving_window_lookback = 5  # Number of window periods to average
-        self.utilization_events = []  # List of utilization events
+        self.utilization_events = deque(maxlen=max_events)  # List of utilization events
+
+        # Cache for expensive calculations
+        self._throughput_cache = None
+        self._cache_timestamp = 0
+        self._cache_validity = 5.0  # Cache valid for 5 time units
 
     @property
     def is_automatic(self):
@@ -609,23 +618,27 @@ class Station(StationaryObject):
         if window_end_time is None:
             window_end_time = self.env.now
         
+        # Check cache validity
+        cache_key = window_end_time
+        if (self._throughput_cache is not None and 
+            self._cache_timestamp == cache_key and
+            (self.env.now - self._cache_timestamp) < self._cache_validity):
+            return self._throughput_cache
+
         window_start_time = window_end_time - self.time_based_window_size
-        
-        # Find events within the window
-        window_events = [
-            event for event in self.throughput_events
-            if window_start_time <= event['timestamp'] <= window_end_time
-        ]
-        
-        # Calculate totals
-        total_carriers = sum(event['carriers'] for event in window_events)
-        total_parts = sum(event['parts'] for event in window_events)
+        # Use deque - much faster than list comprehension
+        total_carriers = 0
+        total_parts = 0
+        for event in self.throughput_events:
+            if window_start_time <= event['timestamp'] <= window_end_time:
+                total_carriers += event['carriers']
+                total_parts += event['parts']
         
         # Calculate rates (per time unit)
         carrier_rate = total_carriers / self.time_based_window_size
         parts_rate = total_parts / self.time_based_window_size
         
-        return {
+        result = {
             'carriers_in_window': total_carriers,
             'parts_in_window': total_parts,
             'carrier_rate': carrier_rate,
@@ -633,6 +646,12 @@ class Station(StationaryObject):
             'window_start': window_start_time,
             'window_end': window_end_time
         }
+        
+        # Cache result
+        self._throughput_cache = result
+        self._cache_timestamp = cache_key
+        
+        return result
 
     def _get_moving_average_throughput(self, num_windows=None):
         """Calculate moving average over multiple window periods"""
@@ -807,8 +826,9 @@ class Assembly(Station):
             use_rates=use_rates,
             use_normalization=use_normalization,
         )
+        max_events = int(self.time_based_window_size * 20)
         self.NOK_part_error_time = NOK_part_error_time
-        self.scrap_events = []
+        self.scrap_events = deque(maxlen=max_events) 
         self.scrap_window_size = self.time_based_window_size
         self.scrap_moving_window_lookback = 5
 
